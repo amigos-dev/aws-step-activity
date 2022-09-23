@@ -1,0 +1,54 @@
+{
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+    "python.envFile": "${workspaceFolder}/.env",
+    "[python]": {
+        "editor.insertSpaces": true,
+        "editor.tabSize": 2
+    },
+    "terminal.integrated.env.osx": {
+      "PATH": "${workspaceFolder}/bin:${env:PATH}",
+      "PYTHONPATH": "${workspaceFolder}/src/python:${env:PYTHONPATH}"
+    },
+    "terminal.integrated.env.linux": {
+      "PATH": "${workspaceFolder}/bin:${env:PATH}",
+      "PYTHONPATH": "${workspaceFolder}/src/python:${env:PYTHONPATH}"
+    },
+    "terminal.integrated.env.windows": {
+      "PATH": "${workspaceFolder}/bin:${env:PATH}",
+      "PYTHONPATH": "${workspaceFolder}/src/python:${env:PYTHONPATH}"
+    },
+    "python.analysis.watchSearchPaths": true,
+    "python.linting.mypyEnabled": false,
+    "python.linting.enabled": true,
+    "python.linting.pylintEnabled": true,
+    "python.linting.ignorePatterns": [
+      ".vscode/*.py",
+      "trash/**/*.py",
+      "**/site-packages/**/*.py",
+      ".venv/**/*.py"
+    ],
+    "tasks": [
+      {
+          "type": "shell",
+          "label": "autoflake.removeUnusedImports",
+          "command": "${command:python.interpreterPath}",
+          "args": [
+              "-m",
+              "autoflake",
+              "-i",
+              "--remove-all-unused-imports",
+              "${file}"
+            ],
+          "presentation": {
+              "echo": true,
+              "reveal": "silent",
+              "focus": false,
+              "panel": "dedicated",
+              "showReuseMessage": false,
+              "clear": false,
+              "close": true
+            },
+          "problemMatcher": []
+        }
+      ]
+}
