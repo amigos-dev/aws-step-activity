@@ -29,120 +29,13 @@
             "justMyCode": false
         },
         {
-            "name": "xpulumi test",
+            "name": "worker test",
             "type": "python",
             "request": "launch",
-            "module": "xpulumi",
+            "module": "diffusion_worker",
             "args": [
-                "--tb",
-                "test"
             ],
             "justMyCode": false
-        },
-        {
-            "name": "backend create local",
-            "type": "python",
-            "request": "launch",
-            "module": "xpulumi",
-            "args": [
-                "--tb",
-                "backend",
-                "create",
-                "local"
-            ],
-            "justMyCode": false
-        },
-        {
-            "name": "stack output",
-            "type": "python",
-            "request": "launch",
-            "module": "xpulumi.pulumi_cli",
-            "args": [
-                "stack",
-                "output",
-            ],
-            "justMyCode": false,
-            "cwd": "${workspaceFolder}/xp/project/dev-box"
-        },
-        {
-            "name": "pulumi commandline parser",
-            "type": "python",
-            "request": "launch",
-            "program": "${workspaceFolder}/xpulumi/pulumi_cli/help_metadata.py",
-            "args": [
-                "parse",
-                "--",
-                "-s",
-                "foo",
-                "stack",
-                "export"
-            ],
-            "justMyCode": false,
-            "cwd": "${workspaceFolder}/xpulumi/pulumi_cli"
-        },
-        {
-            "name": "devbox pulumi up -R",
-            "type": "python",
-            "request": "launch",
-            "module": "xpulumi.pulumi_cli",
-            "args": [
-                "--debug-cli",
-                "up",
-                "-R"
-            ],
-            "justMyCode": false,
-            "cwd": "${workspaceFolder}/xp/project/devbox"
-        },
-        {
-            "name": "devbox pulumi up",
-            "type": "python",
-            "request": "launch",
-            "module": "xpulumi.pulumi_cli",
-            "args": [
-                "--debug-cli",
-                "up",
-            ],
-            "justMyCode": false,
-            "cwd": "${workspaceFolder}/xp/project/devbox"
-        },
-        {
-            "name": "awsenv stack rm",
-            "type": "python",
-            "request": "launch",
-            "module": "xpulumi.pulumi_cli",
-            "args": [
-                "--debug-cli",
-                "stack",
-                "rm",
-            ],
-            "justMyCode": false,
-            "cwd": "${workspaceFolder}/xp/project/awsenv"
-        },
-        {
-            "name": "helloworld raw stack ls",
-            "type": "python",
-            "request": "launch",
-            "module": "xpulumi.pulumi_cli",
-            "args": [
-                "--debug-cli",
-                "--raw-pulumi",
-                "stack",
-                "ls",
-            ],
-            "justMyCode": false,
-            "cwd": "${workspaceFolder}/xp/project/helloworld"
-        },
-        {
-            "name": "aws-dev2 init-env",
-            "type": "python",
-            "request": "launch",
-            "module": "xpulumi",
-            "args": [
-                "--tb",
-                "init-env"
-            ],
-            "justMyCode": false,
-            "cwd": "${workspaceFolder}/../aws-dev2"
         }
     ]
 }
