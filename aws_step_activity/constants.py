@@ -3,7 +3,6 @@
 # MIT License - See LICENSE file accompanying this package.
 #
 
-"""Constants used by secret_kv"""
+"""Constants used by this package"""
 
 DEFAULT_AWS_PROFILE = 'amigos'
-DEFAULT_AWS_STEP_FUNCTION_ACTIVITY_NAME = 'Sam-MSI-worker'

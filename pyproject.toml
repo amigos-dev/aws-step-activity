@@ -1,13 +1,13 @@
 [tool.poetry]
-name = "diffusion-worker"
+name = "aws-step-activity"
 version = "0.1.0"
-description = "Python app that serves as an AWS step function activity worker to create stable diffusion images"
+description = "Python library and commandline app that serves as an AWS step function activity worker"
 authors = ["Sam McKelvie <sam@amigos.dev>"]
 license = "MIT"
 keywords = [ "ML", "AI", "stable", "diffusion", "AWS", "step", "function" ]
 readme = "README.md"
-homepage = "https://github.com/amigos-dev/diffusion-worker"
-repository = "https://github.com/amigos-dev/diffusion-worker.git"
+homepage = "https://github.com/amigos-dev/aws-step-activity"
+repository = "https://github.com/amigos-dev/aws-step-activity.git"
 
 [tool.poetry.dependencies]
 python = "^3.8"
@@ -24,7 +24,7 @@ types-PyYAML = "^6.0.5"
 pylint = "^2.13.5"
 
 [tool.semantic_release]
-version_variable = "diffusion_worker/version.py:__version__"
+version_variable = "aws_step_activity/version.py:__version__"
 version_toml = "pyproject.toml:tool.poetry.version"
 upload_to_pypi = false
 upload_to_release = true
@@ -71,4 +71,4 @@ requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.scripts]
-diffusion-worker = 'diffusion_worker.__main__:run'
+aws-step-activity = 'aws_step_activity.__main__:run'
