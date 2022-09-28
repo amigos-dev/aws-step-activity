@@ -7,15 +7,19 @@
     },
     "terminal.integrated.env.osx": {
       "PATH": "${workspaceFolder}/bin:${env:PATH}",
-      "PYTHONPATH": "${workspaceFolder}/src/python:${env:PYTHONPATH}"
+      "PYTHONPATH": "${workspaceFolder}/src/python:${env:PYTHONPATH}",
+      "AWS_PROFILE": "amigos"
     },
     "terminal.integrated.env.linux": {
       "PATH": "${workspaceFolder}/bin:${env:PATH}",
-      "PYTHONPATH": "${workspaceFolder}/src/python:${env:PYTHONPATH}"
+      "PYTHONPATH": "${workspaceFolder}/src/python:${env:PYTHONPATH}",
+      "AWS_PROFILE": "amigos",
+      "OLD_PATH": "${env:PATH}"
     },
     "terminal.integrated.env.windows": {
       "PATH": "${workspaceFolder}/bin:${env:PATH}",
-      "PYTHONPATH": "${workspaceFolder}/src/python:${env:PYTHONPATH}"
+      "PYTHONPATH": "${workspaceFolder}/src/python:${env:PYTHONPATH}",
+      "AWS_PROFILE": "amigos"
     },
     "python.analysis.watchSearchPaths": true,
     "python.linting.mypyEnabled": false,
