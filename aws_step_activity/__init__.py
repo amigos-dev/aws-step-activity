@@ -4,6 +4,7 @@
 #
 
 from .util import CreateSession
-from .activity import AwsStepActivity
+from .worker import AwsStepActivityWorker
 from .task import AwsStepActivityTask
 from .task_context import AwsStepActivityTaskContext
+from .handler import AwsStepActivityTaskHandler

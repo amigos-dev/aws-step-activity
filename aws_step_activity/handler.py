@@ -27,31 +27,49 @@ import time
 import traceback
 import sys
 
+from .worker import AwsStepActivityWorker
 from .task import AwsStepActivityTask
 from .task_context import AwsStepActivityTaskContext
 
-class AwsStepActivity:
-  mutex: Lock
-  cv: Condition
-  session: Session
-  sfn: SFNClient
-  activity_name: str
-  activity_arn: str
-  worker_name: str
-  shutting_down: bool = False
-  heartbeat_seconds: float
-  max_task_total_seconds: Optional[float]
+class AwsStepActivityTaskHandler:
+  worker: AwsStepActivityWorker
+  task: AwsStepActivityTask
 
 
   def __init__(
         self,
         session: Optional[Session]=None,
+        aws_profile: Optional[str]=None,
+        aws_region: Optional[str]=None,
         activity_name: Optional[str]=None,
         activity_arn: Optional[str]=None,
         worker_name: Optional[str]=None,
         heartbeat_seconds: float=20.0,
         max_task_total_seconds: Optional[float]=None,
       ):
+    """Create a new worker associated with a specific AWS step function activity
+
+    Args:
+        session (Optional[Session], optional):
+            An AWS session to use as basis for access to AWS. If None, a new basis session is created
+            using other parameters.  In any case a new session will be created from the basis, to ensure
+            thread safety for background requests. Defaults to None.
+        aws_profile (Optional[str], optional):
+            An AWS profile name to use for a new basis session. Ignored if session is provided. If
+            None, the default profile is used. Defaults to None.
+        aws_region (Optional[str], optional):
+            The AWS region to use. Defaults to None.
+        activity_name (Optional[str], optional): _description_. Defaults to None.
+        activity_arn (Optional[str], optional): _description_. Defaults to None.
+        worker_name (Optional[str], optional): _description_. Defaults to None.
+        heartbeat_seconds (float, optional): _description_. Defaults to 20.0.
+        max_task_total_seconds (Optional[float], optional): _description_. Defaults to None.
+
+    Raises:
+        RuntimeError: _description_
+        RuntimeError: _description_
+        RuntimeError: _description_
+    """
     if activity_name is None and activity_arn is None:
       raise RuntimeError("Either activity_name or activity_arn must be provided")
     if worker_name is None:
@@ -64,7 +82,7 @@ class AwsStepActivity:
     self.cv = Condition(self.mutex)
 
     if session is None:
-      session = Session()
+      session = Session(profile_name=aws_profile, region_name=aws_region)
 
     self.session = session
 
@@ -151,12 +169,12 @@ class AwsStepActivity:
                                     parameters.
         heartbeat_seconds (Optional[float], optional):
            The number of seconds between heartbeats. Ignored if 'heartbeat_seconds' is provided
-           in the task data. If None, the value provided at AwsStepActivity construction time is used.
+           in the task data. If None, the value provided at AwsStepActivityWorker construction time is used.
            Defaults to None.
         max_total_seconds (Optional[float], optional):
            The maximum total number of seconds to run the task before sending a failure completion.
            Ignored if 'max_total_seconds' is provided in the task data. If None, the value provided
-           at AwsStepActivity construction time is used. If that is None, then there will be no limit
+           at AwsStepActivityWorker construction time is used. If that is None, then there will be no limit
            to how long the task can run. Defaults to None.
     """
 
