@@ -33,7 +33,7 @@ class AwsStepActivityTaskContext:
   background_session: Session
   background_sfn: SFNClient
   background_thread: Optional[Thread] = None
-  interval_seconds: float
+  heartbeat_seconds: float
   max_total_seconds: float
   task_completed: bool = False
   start_time_ns: int
@@ -43,7 +43,7 @@ class AwsStepActivityTaskContext:
         self,
         task: AwsStepActivityTask,
         session: Optional[Session]=None,
-        interval_seconds: float=20.0,
+        heartbeat_seconds: float=20.0,
         max_total_seconds: Optional[float]=None
       ):
     """Create a context manager for a running AWS stepfunction activity task
@@ -61,14 +61,14 @@ class AwsStepActivityTaskContext:
         session (Optional[Session], optional):
                 The AWS session to use as a template, or None to use a default session.
                 A new session will always be created from the template for thread safety. Defaults to None.
-        interval_seconds (float, optional):
+        heartbeat_seconds (float, optional):
                 The interval in seconds between heartbeats. Defaults to 20.0.
         max_total_seconds (Optional[float], optional):
                 A maximum number of total seconds before the task should fail. If None or 0.0, the task
                 will never time out. Defaults to None.
     """
     self.start_time_ns = time.monotonic_ns()
-    self.interval_seconds = interval_seconds
+    self.heartbeat_seconds = heartbeat_seconds
     if max_total_seconds is None:
       max_total_seconds = 0.0
     self.max_total_seconds = max_total_seconds
@@ -218,7 +218,7 @@ class AwsStepActivityTaskContext:
           while True:
             if self.task_completed:
               break
-            sleep_secs = self.interval_seconds
+            sleep_secs = self.heartbeat_seconds
             remaining_time_sec = self.remaining_time()
             if not remaining_time_sec is None:
               if remaining_time_sec <= 0.0:

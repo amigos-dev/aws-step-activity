@@ -5,7 +5,7 @@
 
 import sys
 from time import sleep
-from typing import TYPE_CHECKING, Optional, Dict, Type
+from typing import TYPE_CHECKING, Optional, Dict, Type, Union
 from types import TracebackType
 
 from mypy_boto3_stepfunctions.client import SFNClient, Exceptions as SFNExceptions
@@ -27,6 +27,7 @@ import time
 import traceback
 import sys
 
+from .constants import DEFAULT_AWS_STEP_ACTIVITY_TASK_HANDLER_CLASS_NAME
 from .task import AwsStepActivityTask
 from .task_context import AwsStepActivityTaskContext
 
@@ -44,23 +45,24 @@ class AwsStepActivityWorker:
   shutting_down: bool = False
   heartbeat_seconds: float
   max_task_total_seconds: Optional[float]
-  default_task_handler_class_name = "aws_step_activity.AwsStepActivityTaskHandler"
-
+  default_task_handler_class: Optional[Type['AwsStepActivityTaskHandler']] = None
 
   def __init__(
         self,
+        activity_id: str,
         session: Optional[Session]=None,
         aws_profile: Optional[str]=None,
         aws_region: Optional[str]=None,
-        activity_name: Optional[str]=None,
-        activity_arn: Optional[str]=None,
         worker_name: Optional[str]=None,
         heartbeat_seconds: float=20.0,
         max_task_total_seconds: Optional[float]=None,
+        default_task_handler_class: Optional[Union[str, Type['AwsStepActivityTaskHandler']]]=None
       ):
     """Create a new worker associated with a specific AWS step function activity
 
     Args:
+        activity_id (str):
+            The ARN or the name of the AWS stepfunction activity.
         session (Optional[Session], optional):
             An AWS session to use as basis for access to AWS. If None, a new basis session is created
             using other parameters.  In any case a new session will be created from the basis, to ensure
@@ -69,25 +71,26 @@ class AwsStepActivityWorker:
             An AWS profile name to use for a new basis session. Ignored if session is provided. If
             None, the default profile is used. Defaults to None.
         aws_region (Optional[str], optional):
-            The AWS region to use. Defaults to None.
-        activity_name (Optional[str], optional): _description_. Defaults to None.
-        activity_arn (Optional[str], optional): _description_. Defaults to None.
-        worker_name (Optional[str], optional): _description_. Defaults to None.
-        heartbeat_seconds (float, optional): _description_. Defaults to 20.0.
-        max_task_total_seconds (Optional[float], optional): _description_. Defaults to None.
-
-    Raises:
-        RuntimeError: _description_
-        RuntimeError: _description_
-        RuntimeError: _description_
+            The AWS region to use for creation of a new session. Ignored if session is provided. If None,
+            the default region for the AWS profile is used. Defaults to None.
+        worker_name (Optional[str], optional):
+            The name of this worker node, for use in logging and completion reporting. If None,
+            a unique name based on the local MAC address is created. Defaults to None.
+        heartbeat_seconds (float, optional):
+            The default number of seconds between heartbeat notifications to AWS while a task execution is in
+            progress.  Ignored if a particular task has heartbeat_seconds provided in the task parameters, or
+            if heartbeat_seconds is provided ad run() time. Defaults to 20.0.
+        max_task_total_seconds (Optional[float], optional):
+            The default maximum total number of seconds for a dask to run before a failure is posted. None
+            or 0.0 if no limit is to be imposed. Ignored if max_task_total_seconds is provided in the task
+            parameters, or if max_task_total_seconds is provided at run() time. Defaults to None.
     """
-    if activity_name is None and activity_arn is None:
-      raise RuntimeError("Either activity_name or activity_arn must be provided")
     if worker_name is None:
       worker_name = f'{uuid.getnode():#016x}'
     self.worker_name = worker_name
     self.heartbeat_seconds = heartbeat_seconds
     self.max_task_total_seconds = max_task_total_seconds
+    self.default_task_handler_class = self.resolve_handler_class(default_task_handler_class)
 
     self.mutex = Lock()
     self.cv = Condition(self.mutex)
@@ -100,7 +103,16 @@ class AwsStepActivityWorker:
     sfn = self.session.client('stepfunctions')
     self.sfn = sfn
 
-    if activity_arn is None:
+    activity_arn: str
+    activity_name: str
+    if '/' in activity_id:
+      # activity_id must be an ARN. Look up the activity name
+      activity_arn = activity_id
+      resp = sfn.describe_activity(activityArn=activity_arn)
+      activity_name = resp['name']
+    else:
+      # activity_id must be an activity name.  Look up the ARN
+      activity_name = activity_id
       activity_name_to_arn: Dict[str, str] = {}
       paginator = sfn.get_paginator('list_activities')
       page_iterator = paginator.paginate()
@@ -110,19 +122,29 @@ class AwsStepActivityWorker:
       activity_arn = activity_name_to_arn.get(activity_name, None)
       if activity_arn is None:
         raise RuntimeError(f"AWS stepfunctions activity name '{activity_name}' was not found")
-    else:
-      resp = sfn.describe_activity(activityArn=activity_arn)
-      if activity_name is None:
-        activity_name = resp['name']
-      else:
-        if activity_name != resp['name']:
-          raise RuntimeError(f"AWS stepfunctions activity name '{activity_name}' does not match actual activity name '{resp['name']}' for ARN '{activity_arn}'")
     self.activity_name = activity_name
     self.activity_arn = activity_arn
     
-  def create_handler(self, task: AwsStepActivityTask) -> AwsStepActivityTaskHandler:
-    handler_class_name = task.data.get()
+  def resolve_handler_class(
+        self,
+        handler_class: Optional[Union[str, Type['AwsStepActivityTaskHandler']]]) -> Type['AwsStepActivityTaskHandler']:
+    if handler_class is None:
+      handler_class = self.default_task_handler_class
+    if handler_class is None:
+      handler_class = DEFAULT_AWS_STEP_ACTIVITY_TASK_HANDLER_CLASS_NAME
+    if isinstance(handler_class, str):
+      import importlib
+      from .handler import AwsStepActivityTaskHandler
+      module_name, short_class_name = handler_class.rsplit('.', 1)
+      module = importlib.import_module(module_name)
+      handler_class = module.getattr(short_class_name)
+    if not issubclass(handler_class, AwsStepActivityTaskHandler):
+      raise RuntimeError(f"handler class is not a subclass of AwsStepActivityTaskHandler: {handler_class}")
+    return handler_class
     
+  def create_handler(self, task: AwsStepActivityTask) -> 'AwsStepActivityTaskHandler':
+    handler_class = self.resolve_handler_class(task.data.get('handler_class', None))
+    handler = handler_class(self, task)
 
   def get_next_task(self) -> Optional[AwsStepActivityTask]:
     """Use long-polling to wait for and dequeue the next task on the AWS stepfunctions activity.

@@ -3,6 +3,7 @@
 # MIT License - See LICENSE file accompanying this package.
 #
 from .version import __version__
+from .constants import *
 from .util import CreateSession
 from .worker import AwsStepActivityWorker
 from .task import AwsStepActivityTask
