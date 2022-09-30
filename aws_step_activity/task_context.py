@@ -11,7 +11,7 @@ from .internal_types import Jsonable, JsonableDict
 
 import boto3
 from boto3 import Session
-from .util import CreateSession
+from .util import create_aws_session
 
 import threading
 from threading import Thread, Lock, Condition
@@ -79,7 +79,7 @@ class AwsStepActivityTaskContext:
     if session is None:
       session = Session()
 
-    self.background_session = CreateSession(session=session)
+    self.background_session = create_aws_session(session=session)
     self.background_sfn = self.background_session.client('stepfunctions')
 
   def send_task_success_locked(self, output_data: JsonableDict):

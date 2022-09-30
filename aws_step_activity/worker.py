@@ -16,7 +16,7 @@ from .internal_types import Jsonable, JsonableDict
 import boto3
 from boto3 import Session
 from botocore.exceptions import ReadTimeoutError
-from .util import CreateSession
+from .util import create_aws_session, describe_aws_step_activity
 
 import threading
 from threading import Thread, Lock, Condition
@@ -26,6 +26,8 @@ import uuid
 import time
 import traceback
 import sys
+from datetime import datetime
+from dateutil.parser import parse as dateutil_parse
 
 from .constants import DEFAULT_AWS_STEP_ACTIVITY_TASK_HANDLER_CLASS_NAME
 from .task import AwsStepActivityTask
@@ -41,6 +43,7 @@ class AwsStepActivityWorker:
   sfn: SFNClient
   activity_name: str
   activity_arn: str
+  activity_creation_date: datetime
   worker_name: str
   shutting_down: bool = False
   heartbeat_seconds: float
@@ -103,31 +106,16 @@ class AwsStepActivityWorker:
     sfn = self.session.client('stepfunctions')
     self.sfn = sfn
 
-    activity_arn: str
-    activity_name: str
-    if '/' in activity_id:
-      # activity_id must be an ARN. Look up the activity name
-      activity_arn = activity_id
-      resp = sfn.describe_activity(activityArn=activity_arn)
-      activity_name = resp['name']
-    else:
-      # activity_id must be an activity name.  Look up the ARN
-      activity_name = activity_id
-      activity_name_to_arn: Dict[str, str] = {}
-      paginator = sfn.get_paginator('list_activities')
-      page_iterator = paginator.paginate()
-      for page in page_iterator:
-        for act_desc in page['activities']:
-          activity_name_to_arn[act_desc['name']] = act_desc['activityArn']
-      activity_arn = activity_name_to_arn.get(activity_name, None)
-      if activity_arn is None:
-        raise RuntimeError(f"AWS stepfunctions activity name '{activity_name}' was not found")
-    self.activity_name = activity_name
-    self.activity_arn = activity_arn
+    resp = describe_aws_step_activity(sfn, activity_id)
+
+    self.activity_arn: str = resp['activityArn']
+    self.activity_name: str = resp['name']
+    self.activity_creation_date = dateutil_parse(resp['creationDate'])
     
   def resolve_handler_class(
         self,
         handler_class: Optional[Union[str, Type['AwsStepActivityTaskHandler']]]) -> Type['AwsStepActivityTaskHandler']:
+    from .handler import AwsStepActivityTaskHandler
     if handler_class is None:
       handler_class = self.default_task_handler_class
     if handler_class is None:
@@ -137,7 +125,7 @@ class AwsStepActivityWorker:
       from .handler import AwsStepActivityTaskHandler
       module_name, short_class_name = handler_class.rsplit('.', 1)
       module = importlib.import_module(module_name)
-      handler_class = module.getattr(short_class_name)
+      handler_class = getattr(module, short_class_name)
     if not issubclass(handler_class, AwsStepActivityTaskHandler):
       raise RuntimeError(f"handler class is not a subclass of AwsStepActivityTaskHandler: {handler_class}")
     return handler_class
@@ -145,6 +133,7 @@ class AwsStepActivityWorker:
   def create_handler(self, task: AwsStepActivityTask) -> 'AwsStepActivityTaskHandler':
     handler_class = self.resolve_handler_class(task.data.get('handler_class', None))
     handler = handler_class(self, task)
+    return handler
 
   def get_next_task(self) -> Optional[AwsStepActivityTask]:
     """Use long-polling to wait for and dequeue the next task on the AWS stepfunctions activity.
@@ -159,6 +148,7 @@ class AwsStepActivityWorker:
         Optional[AwsStepActivityTask]: The dequeued task descriptor, or None if no task was dequeued.
     """
     try:
+      print(f"Waiting for AWS step function activity task on ARN={self.activity_arn}, name={self.activity_name}", file=sys.stderr)
       resp = self.sfn.get_activity_task(activityArn=self.activity_arn, workerName=self.worker_name)
     except ReadTimeoutError:
       return None
@@ -194,9 +184,7 @@ class AwsStepActivityWorker:
 
   def run_task(
         self,
-        task: AwsStepActivityTask,
-        heartbeat_seconds:Optional[float]=None,
-        max_total_seconds: Optional[float]=None
+        task: AwsStepActivityTask
       ):
     """Runs a single AWS stepfunction activity task that has been dequeued, sends periodic
     heartbeats, and sends an appropriate success or failure completion message for the task.
@@ -204,44 +192,19 @@ class AwsStepActivityWorker:
     Args:
         task (AwsStepActivityTask): The active task descriptor that should be run. task.data contains the imput
                                     parameters.
-        heartbeat_seconds (Optional[float], optional):
-           The number of seconds between heartbeats. Ignored if 'heartbeat_seconds' is provided
-           in the task data. If None, the value provided at AwsStepActivityWorker construction time is used.
-           Defaults to None.
-        max_total_seconds (Optional[float], optional):
-           The maximum total number of seconds to run the task before sending a failure completion.
-           Ignored if 'max_total_seconds' is provided in the task data. If None, the value provided
-           at AwsStepActivityWorker construction time is used. If that is None, then there will be no limit
-           to how long the task can run. Defaults to None.
     """
+    from .handler import AwsStepActivityTaskHandler
 
     try:
-      heartbeat_seconds_final: Optional[float] = task.data.get('heartbeat_seconds', None)
-      if heartbeat_seconds_final is None:
-        heartbeat_seconds_final = heartbeat_seconds
-      if heartbeat_seconds_final is None:
-        heartbeat_seconds_final = self.heartbeat_seconds
-
-      max_total_seconds_final: Optional[float]
-      if 'max_total_seconds' in task.data:
-        max_total_seconds_final = task.data['max_total_seconds']
-      else:
-        max_total_seconds_final = max_total_seconds
-        if max_total_seconds_final is None:
-          max_total_seconds_final = self.max_task_total_seconds
-
-      with AwsStepActivityTaskContext(
-            task,
-            session=self.session,
-            interval_seconds=heartbeat_seconds_final,
-            max_total_seconds=max_total_seconds_final
-          ) as ctx:
-        # at this point, heartbdeats are automatically being sent by a background thread, until
-        # we exit the context
-        result = self.run_task_in_context(task, ctx)
-        # If an exception was raised, exiting the context will send the failure message
-        ctx.send_task_success(result)
-
+      handler = self.create_handler(task)
+      handler.run()
+    except Exception as ex:
+      try:
+        handler = AwsStepActivityTaskHandler(self, task)
+        exc, exc_type, tb = sys.exc_info()
+        handler.send_task_exception(exc, tb=tb, exc_type=exc_type)
+      except Exception as ex2:
+        print(f"Unable to send generic failure response ({ex}) for task: {ex2}", file=sys.stderr)
     except Exception as e:
       print(f"Exception occurred processing AWS step function activity task {task.task_token}", file=sys.stderr)
       print(traceback.format_exc(), file=sys.stderr)

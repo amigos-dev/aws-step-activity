@@ -14,6 +14,8 @@ python = "^3.8"
 boto3 = "^1.24.80"
 boto3-stubs = {extras = ["essential", "stepfunctions"], version = "^1.24.80"}
 PyYAML = "^6.0"
+argcomplete = "^2.0.0"
+"ruamel.yaml" = "^0.17.21"
 
 [tool.poetry.dev-dependencies]
 mypy = "^0.931"

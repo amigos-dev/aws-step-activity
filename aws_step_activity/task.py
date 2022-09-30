@@ -32,8 +32,11 @@ class AwsStepActivityTask:
           not isinstance(resp['taskToken'], str) or 
           resp['taskToken'] == '' or
           not 'input' in resp or 
-          not isinstance(resp['input'], dict)
+          not isinstance(resp['input'], str)
         ):
       raise RuntimeError("Invalid AWS stepfunctions task descriptor")
     self.task_token = resp['taskToken']
-    self.data = json.loads(resp['input'])
+    try:
+      self.data = json.loads(resp['input'])
+    except Exception as ex:
+      raise RuntimeError("Invalid AWS stepfunctions task descriptor--invalid JSON input") from ex

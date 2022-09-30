@@ -16,7 +16,7 @@ from .internal_types import Jsonable, JsonableDict
 import boto3
 from boto3 import Session
 from botocore.exceptions import ReadTimeoutError
-from .util import CreateSession
+from .util import create_aws_session
 
 import threading
 from threading import Thread, Lock, Condition
@@ -30,7 +30,7 @@ import sys
 from .worker import AwsStepActivityWorker
 from .task import AwsStepActivityTask
 from .task_context import AwsStepActivityTaskContext
-from .util import CreateSession
+from .util import create_aws_session, full_type
 
 class AwsStepActivityTaskHandler:
   """A task handler for a single dequeued task instance on an AWS stepfunction activity
@@ -44,8 +44,6 @@ class AwsStepActivityTaskHandler:
   session: Session
   sfn: SFNClient
   background_thread: Optional[Thread] = None
-  heartbeat_seconds: Optional[float]
-  max_total_seconds: Optional[float]
   task_completed: bool = False
   start_time_ns: int
   end_time_ns: Optional[int] = None
@@ -54,8 +52,6 @@ class AwsStepActivityTaskHandler:
         self,
         worker: AwsStepActivityWorker,
         task: AwsStepActivityTask,
-        heartbeat_seconds:Optional[float]=None,
-        max_total_seconds: Optional[float]=None
       ):
     """Create a new task handler specific AWS step function activity task instance
 
@@ -64,25 +60,14 @@ class AwsStepActivityTaskHandler:
             The worker that this task handler is running under.
         task (AwsStepActivityTask):
             The task descriptor as received from AWS.
-        heartbeat_seconds (Optional[float], optional):
-           The number of seconds between heartbeats. Ignored if 'heartbeat_seconds' is provided
-           in the task data. If None, the value provided at AwsStepActivityWorker construction time is used.
-           Defaults to None.
-        max_total_seconds (Optional[float], optional):
-           The maximum total number of seconds to run the task before sending a failure completion.
-           Ignored if 'max_total_seconds' is provided in the task data. If None, the value provided
-           at AwsStepActivityWorker construction time is used. If that is None, then there will be no limit
-           to how long the task can run. Defaults to None.
     """
     self.start_time_ns = time.monotonic_ns()
     self.session_mutex = Lock()
     self.cv = Condition(self.session_mutex)
     self.worker = worker
     self.task = task
-    self.session = CreateSession(worker.session)
+    self.session = create_aws_session(worker.session)
     self.sfn = self.session.client('stepfunctions')
-    self.heartbeat_seconds = heartbeat_seconds
-    self.max_total_seconds = max_total_seconds
 
   def run_in_context(self) -> JsonableDict:
     """Synchronously runs this AWS stepfunction activity task inside an already active context.
@@ -99,8 +84,7 @@ class AwsStepActivityTaskHandler:
     Returns:
         JsonableDict: The deserialized JSON successful completion value for the task.
     """
-    time.sleep(10)
-    raise RuntimeError("run_in_context() is not implemented")
+    raise RuntimeError(f"run_in_context() is not implemented by class {full_type(self)}")
 
   def run(self):
     """Runs this stepfunction activity task, sends periodic
@@ -133,7 +117,7 @@ class AwsStepActivityTaskHandler:
         pass
 
   def fill_default_output_data(self, data: JsonableDict) -> None:
-    if not 'run_time_ns' in data
+    if not 'run_time_ns' in data:
       data['run_time_ns'] = self.elapsed_time_ns()
   
   def fill_default_success_data(self, data: JsonableDict) -> None:
@@ -454,7 +438,7 @@ class AwsStepActivityTaskHandler:
         If the task is completed, the total runtime in seconds.
         Otherwise, the current task runtime in seconds.
     """
-    return self.elapsed_time_ns()) / 1000000000.0
+    return self.elapsed_time_ns() / 1000000000.0
 
   def remaining_time_ns(self) -> Optional[int]:
     """Returns the remaining time in nanoseconds before the task is cancelled
@@ -481,12 +465,10 @@ class AwsStepActivityTaskHandler:
     return max(0.0, max_total_secs - self.elapsed_time_seconds())
 
   def heartbeat_interval_seconds(self) -> float:
-    """Returns the final resolved heartbeat interval fopr the task in seconds"""
+    """Returns the final resolved heartbeat interval for the task in seconds"""
     heartbeat_seconds_final: Optional[float] = None
     if 'heartbeat_seconds' in self.task.data:
-       heartbeat_seconds_final = = self.task.data['heartbeat_seconds']
-    if heartbeat_seconds_final is None:
-      heartbeat_seconds_final = self.heartbeat_seconds
+       heartbeat_seconds_final = self.task.data['heartbeat_seconds']
     if heartbeat_seconds_final is None:
       heartbeat_seconds_final = self.worker.heartbeat_seconds
     heartbeat_seconds_final = float(heartbeat_seconds_final)
@@ -501,11 +483,9 @@ class AwsStepActivityTaskHandler:
     """Returns the final resolved maximum runtime for the task in seconds, or None if there is no limit"""
     max_total_seconds_final: Optional[float]
     if 'max_total_seconds' in self.task.data:
-      max_total_seconds_final = self.task.data['max_total_seconds'])
+      max_total_seconds_final = self.task.data['max_total_seconds']
     else:
-      max_total_seconds_final = self.max_total_seconds
-      if max_total_seconds_final is None:
-        max_total_seconds_final = self.worker.max_task_total_seconds
+      max_total_seconds_final = self.worker.max_task_total_seconds
     if not max_total_seconds_final is None:
       max_total_seconds_final = float(max_total_seconds_final)
     return max_total_seconds_final

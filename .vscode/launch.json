@@ -29,11 +29,15 @@
             "justMyCode": false
         },
         {
-            "name": "worker test",
+            "name": "Activity worker",
             "type": "python",
             "request": "launch",
-            "module": "diffusion_worker",
+            "module": "aws_step_activity",
             "args": [
+                "--tb",
+                "-p", "amigos",
+                "-a", "Sam-MSI-worker",
+                "run"
             ],
             "justMyCode": false
         }
