@@ -215,7 +215,7 @@ class AwsStepActivityWorker:
         f"Starting AWS step function activity worker on "
           f"activity ARN='{self.activity_arn}', "
           f"activity name='{self.activity_name}', "
-          f"worker name='{self.worker_name}"
+          f"worker name='{self.worker_name}'"
       )
     while not self.shutting_down:
       task = self.get_next_task()

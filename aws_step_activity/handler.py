@@ -157,19 +157,16 @@ class AwsStepActivityTaskHandler:
         # we exit the context
         result = self.full_run_in_context()
         # If an exception was raised, exiting the context will send the failure message
-        self.send_task_success(result)
+        with self.session_mutex:
+          if not self.task_completed:
+            self.send_task_success(result)
       # at this point, final completion has been sent and heartbeat has stopped
     except Exception as ex:
       try:
-        logger.info(f"Exception occurred processing AWS step function activity task {self.task.task_token}")
-        logger.info(traceback.format_exc())
-      except Exception:
-        pass
-      # if an exception was raised before entering the context, then no final completion was sent
-      try:
         with self.session_mutex:
           if not self.task_completed:
-            self.send_task_exception_locked(ex)
+            exc_type, exc, tb = sys.exc_info()
+            self.send_task_exception_locked(exc, tb=tb, exc_type=exc_type)
       except Exception:
         pass
 
