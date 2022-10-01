@@ -10,7 +10,7 @@ from typing import (
     TYPE_CHECKING, Optional, Sequence, List, Union, Dict, TextIO, Mapping, MutableMapping,
     cast, Any, Iterator, Iterable, Tuple, ItemsView, ValuesView, KeysView, Type )
 
-from logging import basicConfig as loggingBasicConfig
+import logging
 from .logging import logger
 
 import os
@@ -311,7 +311,24 @@ class CommandLineInterface:
       args = parser.parse_args(self._argv)
     except ArgparseExitError as ex:
       return ex.exit_code
-    loggingBasicConfig(level=args.loglevel.upper())
+    logging.basicConfig(level=args.loglevel.upper())
+    logging.getLogger('botocore.hooks').setLevel(logging.INFO)
+    logging.getLogger('botocore.parsers').setLevel(logging.INFO)
+    logging.getLogger('botocore.auth').setLevel(logging.INFO)
+    logging.getLogger('botocore.endpoint').setLevel(logging.INFO)
+    logging.getLogger('botocore.httpsession').setLevel(logging.INFO)
+    logging.getLogger('botocore.loaders').setLevel(logging.INFO)
+    logging.getLogger('botocore.credentials').setLevel(logging.INFO)
+    logging.getLogger('botocore.retryhandler').setLevel(logging.INFO)
+    logging.getLogger('botocore.utils').setLevel(logging.INFO)
+    logging.getLogger('botocore.client').setLevel(logging.INFO)
+    logging.getLogger('botocore.session').setLevel(logging.INFO)
+    logging.getLogger('botocore.handlers').setLevel(logging.INFO)
+    logging.getLogger('botocore.awsrequest').setLevel(logging.INFO)
+    logging.getLogger('urllib3.connectionpool').setLevel(logging.INFO)
+    logging.getLogger('s3transfer.utils').setLevel(logging.INFO)
+    logging.getLogger('s3transfer.tasks').setLevel(logging.INFO)
+    logging.getLogger('s3transfer.futures').setLevel(logging.INFO)
     traceback: bool = args.traceback
     try:
       self._args = args

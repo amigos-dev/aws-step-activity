@@ -83,6 +83,10 @@ class AwsStepActivityTaskHandler:
     self.s3 = self.session.client('s3')
     self.task_id = self.worker.get_task_id(task)
 
+  @property
+  def input_data(self) -> Jsonable:
+    return self.task.data
+
   def run_in_context(self) -> JsonableDict:
     """Synchronously runs this AWS stepfunction activity task inside an already active context.
 
@@ -159,7 +163,7 @@ class AwsStepActivityTaskHandler:
         # If an exception was raised, exiting the context will send the failure message
         with self.session_mutex:
           if not self.task_completed:
-            self.send_task_success(result)
+            self.send_task_success_locked(result)
       # at this point, final completion has been sent and heartbeat has stopped
     except Exception as ex:
       try:
@@ -175,6 +179,8 @@ class AwsStepActivityTaskHandler:
       data['run_time_ns'] = self.elapsed_time_ns()
     if not 'task_id' in data:
       data['task_id'] = self.task_id
+    if not 's3_outputs' in data and 's3_outputs' in self.task.data:
+      data['s3_outputs'] = self.task.data['s3_outputs']
   
   def fill_default_success_data(self, data: JsonableDict) -> None:
     self.fill_default_output_data(data)
@@ -223,6 +229,7 @@ class AwsStepActivityTaskHandler:
         output=output_json
       )
     self.cv.notify_all()
+    self.on_complete_sent_locked()
 
   def send_task_success(self, output_data: Optional[JsonableDict]=None):
     """Sends a successful completion notification with output data for the task.
@@ -280,6 +287,7 @@ class AwsStepActivityTaskHandler:
         error=error_str
       )
     self.cv.notify_all()
+    self.on_complete_sent_locked()
 
   def send_task_failure(self, error: Any=None, cause: Jsonable=None):
     """Sends a failure completion notification for the task.
@@ -595,3 +603,13 @@ class AwsStepActivityTaskHandler:
         except Exception:
           pass
     logger.debug(f"Background thread exiting")
+
+  def on_complete_sent_locked(self):
+    """Called after a completion notification is sent
+    
+    session_lock is held. May be called from any thread.  Guaranteed to only be called once.
+    
+    May be overridden by subclasses to cancel long-running processes if the
+    task is cancelled or times out before running to completion
+    """
+    pass

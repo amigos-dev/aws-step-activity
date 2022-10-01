@@ -8,3 +8,4 @@ from .util import create_aws_session
 from .worker import AwsStepActivityWorker
 from .task import AwsStepActivityTask
 from .handler import AwsStepActivityTaskHandler
+from .script_handler import AwsStepScriptHandler

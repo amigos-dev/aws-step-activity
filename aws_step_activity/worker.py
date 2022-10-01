@@ -18,7 +18,7 @@ from .internal_types import Jsonable, JsonableDict
 import boto3
 from boto3 import Session
 from botocore.exceptions import ReadTimeoutError
-from .util import create_aws_session, describe_aws_step_activity
+from .util import create_aws_session, describe_aws_step_activity, full_type
 
 import threading
 from threading import Thread, Lock, Condition
@@ -195,8 +195,13 @@ class AwsStepActivityWorker:
     """
     from .handler import AwsStepActivityTaskHandler
 
+    task_id: Optional[str] = None
     try:
+      task_id = self.get_task_id(task)
+      logger.info(f"Beginning AWS stepfunction task {task_id}")
+      logger.info(f"AWS stepfunction data = {json.dumps(task.data, indent=2, sort_keys=True)}")
       handler = self.create_handler(task)
+      logger.debug(f"AWS stepfunction activity handler class = {full_type(handler)}")
       handler.run()
     except Exception as ex:
       try:
@@ -206,8 +211,9 @@ class AwsStepActivityWorker:
       except Exception as ex2:
         logger.warning(f"Unable to send generic failure response ({ex}) for task: {ex2}")
     except Exception as e:
-      logger.info(f"Exception occurred processing AWS step function activity task {task.task_token}")
+      logger.info(f"Exception occurred processing AWS step function activity task {task_id}")
       logger.info(traceback.format_exc())
+    logger.info(f"Completed AWS stepfunction task {task_id}")
 
   def run(self):
     """Repeatedly wait for and dequeue AWS stepfunction activity tasks and run them"""
@@ -222,10 +228,7 @@ class AwsStepActivityWorker:
       if task is None:
         logger.debug(f"AWS stepfunctions.get_next_task(activity_arn='{self.activity_arn}') long poll timed out... retrying")
       else:
-        logger.info(f"Beginning AWS stepfunction task {task.task_token}")
-        logger.info(f"AWS stepfunction data = {json.dumps(task.data, indent=2, sort_keys=True)}")
         self.run_task(task)
-        logger.info(f"Completed AWS stepfunction task {task.task_token}")
     logger.info(f"Stopping AWS step function activity worker, name='{self.worker_name}")
 
   def shutdown(self):

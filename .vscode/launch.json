@@ -35,6 +35,7 @@
             "module": "aws_step_activity",
             "args": [
                 "--tb",
+                "--loglevel", "debug",
                 "-p", "amigos",
                 "-a", "Sam-MSI-worker",
                 "run"
