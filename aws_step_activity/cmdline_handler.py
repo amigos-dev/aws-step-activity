@@ -3,18 +3,16 @@
 # MIT License - See LICENSE file accompanying this package.
 #
 
-"""Base class for AWS step function activity task handlers"""
+"""Generic AWS step function activity task handler that runs shell commandlines"""
 
 from .logging import logger
 
 import sys
-import os
 from time import sleep
 from typing import Optional, Dict, Type, Any
 from types import TracebackType
 
 from mypy_boto3_stepfunctions.client import SFNClient, Exceptions as SFNExceptions
-from mypy_boto3_s3.client import S3Client, Exceptions as S3Exceptions
 
 from .internal_types import Jsonable, JsonableDict
 
@@ -22,7 +20,7 @@ import boto3
 from boto3 import Session
 from botocore.exceptions import ReadTimeoutError
 from .util import create_aws_session
-from .s3_util import s3_download_folder, s3_upload_folder
+
 import threading
 from threading import Thread, Lock, Condition
 
@@ -31,8 +29,8 @@ import uuid
 import time
 import traceback
 import sys
-import shutil
 
+from .handler import AwsStepActivityTaskHandler
 from .worker import AwsStepActivityWorker
 from .task import AwsStepActivityTask
 from .util import create_aws_session, full_type
@@ -48,19 +46,15 @@ class AwsStepActivityTaskHandler:
   task: AwsStepActivityTask
   session: Session
   sfn: SFNClient
-  s3: S3Client
   background_thread: Optional[Thread] = None
   task_completed: bool = False
   start_time_ns: int
   end_time_ns: Optional[int] = None
-  task_working_dir: str
-  task_id: str
 
   def __init__(
         self,
         worker: AwsStepActivityWorker,
         task: AwsStepActivityTask,
-        task_working_dir: str
       ):
     """Create a new task handler specific AWS step function activity task instance
 
@@ -69,19 +63,14 @@ class AwsStepActivityTaskHandler:
             The worker that this task handler is running under.
         task (AwsStepActivityTask):
             The task descriptor as received from AWS.
-        task_working_dir (str):
-            The directory in which to run the task, and in which to place task artifacts
     """
     self.start_time_ns = time.monotonic_ns()
     self.session_mutex = Lock()
     self.cv = Condition(self.session_mutex)
     self.worker = worker
     self.task = task
-    self.task_working_dir = os.path.abspath(task_working_dir)
     self.session = create_aws_session(worker.session)
     self.sfn = self.session.client('stepfunctions')
-    self.s3 = self.session.client('s3')
-    self.task_id = self.worker.get_task_id(task)
 
   def run_in_context(self) -> JsonableDict:
     """Synchronously runs this AWS stepfunction activity task inside an already active context.
@@ -99,49 +88,6 @@ class AwsStepActivityTaskHandler:
         JsonableDict: The deserialized JSON successful completion value for the task.
     """
     raise RuntimeError(f"run_in_context() is not implemented by class {full_type(self)}")
-  
-  @property
-  def task_output_dir(self) -> str:
-    return os.path.join(self.task_working_dir, 'output')
-
-  @property
-  def task_input_dir(self) -> str:
-    return os.path.join(self.task_working_dir, 'input')
-
-  def full_run_in_context(self) -> JsonableDict:
-    """Synchronously runs this AWS stepfunction activity task inside an already active context.
-
-    This method should be overriden by a subclass to provite a custom activity implementation.
-
-    Heartbeats are already taken care of by the active context, until this function returns. If a
-    JsonableDict is successfully returned, it will be used as the successful completion value for
-    the task.  If an exception is raised, it will be used as the failure indication for the task.
-
-    Raises:
-        Exception:  Any exception that is raised will be used to form a failure cpompletion message for the task.
-
-    Returns:
-        JsonableDict: The deserialized JSON successful completion value for the task.
-    """
-    os.makedirs(self.task_output_dir, exist_ok=True)
-    result: Optional[JsonableDict] = None
-    try:
-      try:
-        os.makedirs(self.task_input_dir, exist_ok=True)
-        if 's3_inputs' in self.task.data:
-          s3_download_folder(self.task.data['s3_inputs'], output_folder=self.task_input_dir, s3=self.s3)
-        
-        result = self.run_in_context()
-      finally:
-        if 's3_outputs' in self.task.data:
-          s3_upload_folder(self.task.data['s3_outputs'], self.task_output_dir, s3=self.s3)
-    finally:
-      keep_task_dir: bool = self.task.data.get('keep_task_dir', False)
-      if not keep_task_dir:
-        if os.path.exists(self.task_working_dir):
-          shutil.rmtree(self.task_working_dir)
-
-    return result
 
   def run(self):
     """Runs this stepfunction activity task, sends periodic
@@ -155,7 +101,7 @@ class AwsStepActivityTaskHandler:
       with self:
         # at this point, heartbeats are automatically being sent by a background thread, until
         # we exit the context
-        result = self.full_run_in_context()
+        result = self.run_in_context()
         # If an exception was raised, exiting the context will send the failure message
         self.send_task_success(result)
       # at this point, final completion has been sent and heartbeat has stopped
@@ -176,8 +122,6 @@ class AwsStepActivityTaskHandler:
   def fill_default_output_data(self, data: JsonableDict) -> None:
     if not 'run_time_ns' in data:
       data['run_time_ns'] = self.elapsed_time_ns()
-    if not 'task_id' in data:
-      data['task_id'] = self.task_id
   
   def fill_default_success_data(self, data: JsonableDict) -> None:
     self.fill_default_output_data(data)
@@ -200,7 +144,7 @@ class AwsStepActivityTaskHandler:
     """
     if self.task_completed or self.shutting_down:
       raise RuntimeError("Execution of the AwsStepActivityTaskHandler was cancelled")
-
+  
   def send_task_success_locked(self, output_data: Optional[JsonableDict]=None):
     """Sends a successful completion notification with output data for the task.
        session_lock must already be held.

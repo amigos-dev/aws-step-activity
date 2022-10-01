@@ -10,6 +10,9 @@ from typing import (
     TYPE_CHECKING, Optional, Sequence, List, Union, Dict, TextIO, Mapping, MutableMapping,
     cast, Any, Iterator, Iterable, Tuple, ItemsView, ValuesView, KeysView, Type )
 
+from logging import basicConfig as loggingBasicConfig
+from .logging import logger
+
 import os
 import sys
 import argparse
@@ -235,6 +238,9 @@ class CommandLineInterface:
     self._parser = parser
     parser.add_argument('--traceback', "--tb", action='store_true', default=False,
                         help='Display detailed exception information')
+    parser.add_argument('--loglevel', default='warning',
+                        choices=['critical', 'error', 'warning', 'info', 'debug'],
+                        help='Set the logging level. Default is "warning"')
     parser.add_argument('-M', '--monochrome', action='store_true', default=False,
                         help='Output to stdout/stderr in monochrome. Default is to colorize if stream is a compatible terminal')
     parser.add_argument('-c', '--compact', action='store_true', default=False,
@@ -305,6 +311,7 @@ class CommandLineInterface:
       args = parser.parse_args(self._argv)
     except ArgparseExitError as ex:
       return ex.exit_code
+    loggingBasicConfig(level=args.loglevel.upper())
     traceback: bool = args.traceback
     try:
       self._args = args

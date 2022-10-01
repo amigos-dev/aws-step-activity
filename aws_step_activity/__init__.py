@@ -7,5 +7,4 @@ from .constants import *
 from .util import create_aws_session
 from .worker import AwsStepActivityWorker
 from .task import AwsStepActivityTask
-from .task_context import AwsStepActivityTaskContext
 from .handler import AwsStepActivityTaskHandler

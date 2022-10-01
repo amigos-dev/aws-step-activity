@@ -3,6 +3,8 @@
 # MIT License - See LICENSE file accompanying this package.
 #
 
+from .logging import logger
+
 from typing import TYPE_CHECKING
 from .internal_types import Jsonable, JsonableDict
 

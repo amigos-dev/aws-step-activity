@@ -3,6 +3,8 @@
 # MIT License - See LICENSE file accompanying this package.
 #
 
+from .logging import logger
+
 import sys
 from time import sleep
 from typing import TYPE_CHECKING, Optional, Dict, Type, Union
@@ -25,13 +27,14 @@ import json
 import uuid
 import time
 import traceback
+import hashlib
+import os
 import sys
 from datetime import datetime
 from dateutil.parser import parse as dateutil_parse
 
 from .constants import DEFAULT_AWS_STEP_ACTIVITY_TASK_HANDLER_CLASS_NAME
 from .task import AwsStepActivityTask
-from .task_context import AwsStepActivityTaskContext
 
 if TYPE_CHECKING:
   from .handler import AwsStepActivityTaskHandler
@@ -49,6 +52,7 @@ class AwsStepActivityWorker:
   heartbeat_seconds: float
   max_task_total_seconds: Optional[float]
   default_task_handler_class: Optional[Type['AwsStepActivityTaskHandler']] = None
+  task_working_dir_parent: str
 
   def __init__(
         self,
@@ -59,7 +63,8 @@ class AwsStepActivityWorker:
         worker_name: Optional[str]=None,
         heartbeat_seconds: float=20.0,
         max_task_total_seconds: Optional[float]=None,
-        default_task_handler_class: Optional[Union[str, Type['AwsStepActivityTaskHandler']]]=None
+        default_task_handler_class: Optional[Union[str, Type['AwsStepActivityTaskHandler']]]=None,
+        task_working_dir_parent: Optional[str] = None
       ):
     """Create a new worker associated with a specific AWS step function activity
 
@@ -87,13 +92,23 @@ class AwsStepActivityWorker:
             The default maximum total number of seconds for a dask to run before a failure is posted. None
             or 0.0 if no limit is to be imposed. Ignored if max_task_total_seconds is provided in the task
             parameters, or if max_task_total_seconds is provided at run() time. Defaults to None.
+        default_task_handler_class(Optional[Union[str, Type[AwsStepActivityTaskHandler]]], optional):
+            A subclass of AwsStepActivityTaskHandler, or the fully qualified name of such a subclass. If
+            None, DEFAULT_AWS_STEP_ACTIVITY_TASK_HANDLER_CLASS_NAME will be used. Each time a task
+            is dequeued from AWS, an instance of this class will be created to handle the task.
+        task_working_dir_parent(Optional[str], optional):
+            The parent directory under which task working directories should be created. If None,
+            './tasks' is used
     """
     if worker_name is None:
-      worker_name = f'{uuid.getnode():#016x}'
+      worker_name = f'{uuid.getnode():016x}'
     self.worker_name = worker_name
     self.heartbeat_seconds = heartbeat_seconds
     self.max_task_total_seconds = max_task_total_seconds
     self.default_task_handler_class = self.resolve_handler_class(default_task_handler_class)
+    if task_working_dir_parent is None:
+      task_working_dir_parent = 'tasks'
+    self.task_working_dir_parent = os.path.abspath(task_working_dir_parent)
 
     self.mutex = Lock()
     self.cv = Condition(self.mutex)
@@ -129,10 +144,21 @@ class AwsStepActivityWorker:
     if not issubclass(handler_class, AwsStepActivityTaskHandler):
       raise RuntimeError(f"handler class is not a subclass of AwsStepActivityTaskHandler: {handler_class}")
     return handler_class
-    
+
+  def get_task_id(self, task: AwsStepActivityTask) -> str:
+    task_token = task.task_token
+    task_id = hashlib.sha256(task_token.encode('utf-8')).hexdigest()
+    return task_id
+
+  def get_task_working_dir(self, task: AwsStepActivityTask) -> str:
+    task_id = self.get_task_id(task)
+    twd = os.path.join(self.task_working_dir_parent, task_id)
+    return twd
+
   def create_handler(self, task: AwsStepActivityTask) -> 'AwsStepActivityTaskHandler':
     handler_class = self.resolve_handler_class(task.data.get('handler_class', None))
-    handler = handler_class(self, task)
+    task_working_dir = self.get_task_working_dir(task)
+    handler = handler_class(self, task, task_working_dir)
     return handler
 
   def get_next_task(self) -> Optional[AwsStepActivityTask]:
@@ -148,39 +174,13 @@ class AwsStepActivityWorker:
         Optional[AwsStepActivityTask]: The dequeued task descriptor, or None if no task was dequeued.
     """
     try:
-      print(f"Waiting for AWS step function activity task on ARN={self.activity_arn}, name={self.activity_name}", file=sys.stderr)
+      logger.debug(f"Waiting for AWS step function activity task on ARN={self.activity_arn}, name={self.activity_name}")
       resp = self.sfn.get_activity_task(activityArn=self.activity_arn, workerName=self.worker_name)
     except ReadTimeoutError:
       return None
     if not 'taskToken' in resp:
       return None
     return AwsStepActivityTask(resp)
-
-  def run_task_in_context(self, task: AwsStepActivityTask, ctx: AwsStepActivityTaskContext) -> JsonableDict:
-    """Synchronously runs a single AWS stepfunction activity task that has been dequeued, inside an already active context.
-
-    This method should be overriden by a subclass to provite a custom activity implementation.
-
-    Heartbeats are already taken care of by the active context, until this function returns. If a
-    JsonableDict is successfully returned, it will be used as the successful completion value for
-    the task.  If an exception is raised, it will be used as the failure indication for the task.
-
-    Args:
-        task (AwsStepActivityTask): The active task descriptor that should be run. task.data contains the imput
-                                    parameters.
-        ctx (AwsStepActivityTaskContext):
-                                    The already active context manager in which the task is running. Generally
-                                    not needed, but it can be used to determine if the task was cancelled or
-                                    timed out, or to send a custom failure response rather than raising an exception.
-
-    Raises:
-        Exception:  Any exception that is raised will be used to form a failure cpompletion message for the task.
-
-    Returns:
-        JsonableDict: The deserialized JSON successful completion value for the task.
-    """
-    time.sleep(10)
-    raise RuntimeError("run_task_in_context() is not implemented")
 
   def run_task(
         self,
@@ -204,22 +204,29 @@ class AwsStepActivityWorker:
         exc, exc_type, tb = sys.exc_info()
         handler.send_task_exception(exc, tb=tb, exc_type=exc_type)
       except Exception as ex2:
-        print(f"Unable to send generic failure response ({ex}) for task: {ex2}", file=sys.stderr)
+        logger.warning(f"Unable to send generic failure response ({ex}) for task: {ex2}")
     except Exception as e:
-      print(f"Exception occurred processing AWS step function activity task {task.task_token}", file=sys.stderr)
-      print(traceback.format_exc(), file=sys.stderr)
+      logger.info(f"Exception occurred processing AWS step function activity task {task.task_token}")
+      logger.info(traceback.format_exc())
 
   def run(self):
-    """Repeatedly wait for and dequeue AWS stepfunction tasks and run them"""
+    """Repeatedly wait for and dequeue AWS stepfunction activity tasks and run them"""
+    logger.info(
+        f"Starting AWS step function activity worker on "
+          f"activity ARN='{self.activity_arn}', "
+          f"activity name='{self.activity_name}', "
+          f"worker name='{self.worker_name}"
+      )
     while not self.shutting_down:
       task = self.get_next_task()
       if task is None:
-        print(f"AWS stepfunctions.get_next_task(activity_arn='{self.activity_arn}') long poll timed out... retrying", file=sys.stderr)
+        logger.debug(f"AWS stepfunctions.get_next_task(activity_arn='{self.activity_arn}') long poll timed out... retrying")
       else:
-        print(f"Beginning AWS stepfunction task {task.task_token}", file=sys.stderr)
-        print(f"AWS stepfunction data = {json.dumps(task.data, indent=2, sort_keys=True)}", file=sys.stderr)
+        logger.info(f"Beginning AWS stepfunction task {task.task_token}")
+        logger.info(f"AWS stepfunction data = {json.dumps(task.data, indent=2, sort_keys=True)}")
         self.run_task(task)
-        print(f"Completed AWS stepfunction task {task.task_token}", file=sys.stderr)
+        logger.info(f"Completed AWS stepfunction task {task.task_token}")
+    logger.info(f"Stopping AWS step function activity worker, name='{self.worker_name}")
 
   def shutdown(self):
     self.shutting_down = True
