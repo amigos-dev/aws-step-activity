@@ -26,6 +26,7 @@ types-PyYAML = "^6.0.5"
 pylint = "^2.13.5"
 
 [tool.semantic_release]
+branch = "main"
 version_variable = "aws_step_activity/version.py:__version__"
 version_toml = "pyproject.toml:tool.poetry.version"
 upload_to_pypi = false
