@@ -3,17 +3,19 @@
 # MIT License - See LICENSE file accompanying this package.
 #
 
+"""General utility functions for this package"""
+
 from .logging import logger
 
 from typing import Optional, Type, Any, Dict
+from .internal_types import Jsonable, JsonableDict, JsonableList
+from collections.abc import Mapping, Iterable
 
 import boto3
 import botocore
 import botocore.session
 from boto3 import Session
 from mypy_boto3_stepfunctions.client import SFNClient, Exceptions as SFNExceptions
-
-from aws_step_activity.internal_types import JsonableDict
 
 def create_aws_session(
       session: Optional[Session]=None,
@@ -89,48 +91,76 @@ def full_type(o: Any) -> str:
   """
   return full_name_of_type(o.__class__)
 
-def describe_aws_step_activity(
-      sfn: SFNClient,
-      activity_id: str
-    ) -> JsonableDict:
-  """Returns the result of SFNClient.describe_activity() for the given activity name or ARN.
+def normalize_jsonable(value: any) -> Jsonable:
+  """Presents an object as a simple JSON-serializable value, recursively.
+  
+  Simple Jsonable scalar values (including None) are preserved.
+  Mappable objects are converted to simple dicts, with string keys and normalized child values.
+  Iterable objects are converted to simple lists with normalized elements.
+  All other values are converted to simple strings.
+
 
   Args:
-      sfn (SFNClient): The boto3 client for AWS step functions
-      activity_id (str): Either an AWS step function activity name, or its ARN
-
-  Raises:
-      RuntimeError: The specified activity_id does not exist.
+      value (any): Any value, interpreted as described above
 
   Returns:
-      JsonableDict: a dict with 'creationDate', 'name' and 'activityArn' fields, similar to t
-                    the result of sfn.describe_activity for the requested ID.
+      Jsonable: A value that can be round-trip converted to JSON and back.
   """
-  activity_arn: str
-  activity_name: str
-  result: JsonableDict
-  if '/' in activity_id:
-    # activity_id must be an ARN. Look up the activity name
-    resp = sfn.describe_activity(activityArn=activity_id)
-    result = dict(
-        name=resp['name'],
-        activityArn=resp['activityArn'],
-        creationDate=str(resp['creationDate'])
-      )
+  if value is None or isinstance(value, (str, float, int, bool)):
+    result = value
+  elif isinstance(value, Mapping):
+    result: JsonableDict = dict((str(k), normalize_jsonable(v)) for k, v in value.items())
+  elif isinstance(value, Iterable):
+    result: JsonableList = [ normalize_jsonable(x) for x in value ]
   else:
-    # activity_id must be an activity name. Enumerate all activities and
-    # find the matching name
-    activity_name_to_entry: Dict[str, JsonableDict] = {}
-    paginator = sfn.get_paginator('list_activities')
-    page_iterator = paginator.paginate()
-    for page in page_iterator:
-      for act_desc in page['activities']:
-        activity_name_to_entry[act_desc['name']] = dict(
-            name=act_desc['name'],
-            activityArn=act_desc['activityArn'],
-            creationDate=str(act_desc['creationDate'])
-          )
-    if not activity_id in activity_name_to_entry:
-      raise RuntimeError(f"AWS stepfunctions activity name '{activity_id}' was not found")
-    result = activity_name_to_entry[activity_id]
-  return result
+    result = str(value)
+
+  return result  
+
+def normalize_jsonable_dict(value: Mapping) -> JsonableDict:
+  """Presents an object as a simple JSON-serializable dict, recursively.
+  
+  Simple Jsonable scalar values (including None) are preserved.
+  Mappable objects are converted to simple dicts, with string keys and normalized child values.
+  Iterable objects are converted to simple lists with normalized elements.
+  All other values are converted to simple strings.
+
+
+  Args:
+      value (Mapping): Any dict-like value, interpreted as described above
+
+  Raises:
+      ValueError: The provided value is not a Mapping
+
+  Returns:
+      JsonablezDict: A dict value that can be round-trip converted to JSON and back.
+  """
+  result = normalize_jsonable(value)
+  if not isinstance(result, dict):
+    raise ValueError(f"Value is not dict-like: {value}")
+
+  return result  
+
+def normalize_jsonable_list(value: Iterable) -> JsonableList:
+  """Presents an object as a simple JSON-serializable list, recursively.
+  
+  Simple Jsonable scalar values (including None) are preserved.
+  Mappable objects are converted to simple dicts, with string keys and normalized child values.
+  Iterable objects are converted to simple lists with normalized elements.
+  All other values are converted to simple strings.
+
+
+  Args:
+      value (Iterable): Any list-like value, interpreted as described above
+
+  Raises:
+      ValueError: The provided value is not Iterable
+
+  Returns:
+      JsonableList: A list value that can be round-trip converted to JSON and back.
+  """
+  result = normalize_jsonable(value)
+  if not isinstance(result, list):
+    raise ValueError(f"Value is not list-like: {value}")
+
+  return result  

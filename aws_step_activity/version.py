@@ -3,6 +3,8 @@
 # MIT License - See LICENSE file accompanying this package.
 #
 
+"""Version string for this package"""
+
 # import importlib.metadata as _metadata
 # __version = _metadata.version(__package__.replace('_','-')) #  e.g., '0.1.0'
 

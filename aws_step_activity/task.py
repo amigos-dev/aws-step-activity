@@ -3,6 +3,8 @@
 # MIT License - See LICENSE file accompanying this package.
 #
 
+"""Implementation of AwsStepActivityTask"""
+
 from .logging import logger
 
 from typing import TYPE_CHECKING

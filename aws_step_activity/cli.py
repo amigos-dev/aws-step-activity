@@ -3,7 +3,7 @@
 # MIT License - See LICENSE file accompanying this package.
 #
 
-"""aws-step-activity CLI"""
+"""Command-line interface for this package"""
 
 import base64
 from typing import (
@@ -33,7 +33,8 @@ from aws_step_activity.worker import AwsStepActivityWorker
 from .exceptions import AwsStepActivityError
 from .internal_types import JsonableTypes, Jsonable, JsonableDict, JsonableList
 from .version import __version__ as pkg_version
-from .util import full_type, create_aws_session, describe_aws_step_activity
+from .util import full_type, create_aws_session
+from .sfn_util import describe_aws_step_activity
 from boto3 import Session
 from mypy_boto3_stepfunctions.client import SFNClient, Exceptions as SFNExceptions
 

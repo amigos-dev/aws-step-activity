@@ -3,7 +3,7 @@
 # MIT License - See LICENSE file accompanying this package.
 #
 
-"""Base class for AWS step function activity task handlers"""
+"""Implementation of AwsSteActivityTaskHandler, the base class for AWS step function activity task handlers"""
 
 from .logging import logger
 

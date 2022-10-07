@@ -5,7 +5,9 @@
 # MIT License - See LICENSE file accompanying this package.
 #
 
-"""aws-step-activity CLI"""
+"""aws-step-activity Command-line interface"""
+
+# This module is run as a script or with "python3 -m"; all imports must be absolute
 
 import sys
 from aws_step_activity.cli import run

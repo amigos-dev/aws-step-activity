@@ -3,11 +3,12 @@
 # MIT License - See LICENSE file accompanying this package.
 #
 
+"""General utility functions for working with AWS S3"""
+
 from .logging import logger
 
-from genericpath import isfile
 from typing import Optional, Type, Any, Dict, Tuple, Generator, IO, List
-from .internal_types import Jsonable
+from .internal_types import Jsonable, JsonableDict
 
 import os
 import sys
@@ -22,8 +23,6 @@ from urllib.parse import urlparse
 import urllib.parse
 
 from .util import create_aws_session
-
-from aws_step_activity.internal_types import JsonableDict
 
 def is_s3_url(url: str) -> bool:
   return url.startswith('s3:')

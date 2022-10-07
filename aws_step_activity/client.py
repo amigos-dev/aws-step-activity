@@ -3,8 +3,9 @@
 # MIT License - See LICENSE file accompanying this package.
 #
 
-"""Implementation of AwsStepActivityWorker"""
-
+"""A client for invoking AWS step functions (
+  i.e., creating and monitoring step function state machine
+  executions) that wrap activities implemented by AwsStepActivityWorker"""
 from .logging import logger
 
 import sys
@@ -39,24 +40,7 @@ from dateutil.parser import parse as dateutil_parse
 from .constants import DEFAULT_AWS_STEP_ACTIVITY_TASK_HANDLER_CLASS_NAME
 from .task import AwsStepActivityTask
 
-if TYPE_CHECKING:
-  from .handler import AwsStepActivityTaskHandler
-  
-class AwsStepActivityWorker:
-  mutex: Lock
-  cv: Condition
-  session: Session
-  sfn: SFNClient
-  activity_name: str
-  activity_arn: str
-  activity_creation_date: datetime
-  worker_name: str
-  shutting_down: bool = False
-  heartbeat_seconds: float
-  max_task_total_seconds: Optional[float]
-  default_task_handler_class: Optional[Type['AwsStepActivityTaskHandler']] = None
-  task_working_dir_parent: str
-
+class AwsStepClient:
   def __init__(
         self,
         activity_id: str,
