@@ -16,6 +16,7 @@ import botocore
 import botocore.session
 from boto3 import Session
 from mypy_boto3_stepfunctions.client import SFNClient, Exceptions as SFNExceptions
+from mypy_boto3_sts.client import STSClient, Exceptions as STSExceptions
 
 def create_aws_session(
       session: Optional[Session]=None,
@@ -62,7 +63,84 @@ def create_aws_session(
   )
 
   return new_session
-    
+
+def get_aws_caller_identity(
+      session: Optional[Session]=None,
+      sts: Optional[STSClient]=None,
+      aws_access_key_id: Optional[str]=None,
+      aws_secret_access_key: Optional[str]=None,
+      aws_session_token: Optional[str]=None,
+      region_name: Optional[str]=None,
+      botocore_session: Optional[botocore.session.Session]=None,
+      profile_name: Optional[str]=None,
+    ) -> JsonableDict:
+  if sts is None:
+    if session is None:
+      session = create_aws_session(
+          aws_access_key_id=aws_access_key_id,
+          aws_secret_access_key=aws_secret_access_key,
+          aws_session_token=aws_session_token,
+          region_name=region_name,
+          botocore_session=botocore_session,
+          profile_name=profile_name
+      )
+    sts = session.client('sts')
+  resp = sts.get_caller_identity()
+  return normalize_jsonable_dict(resp)
+
+def get_aws_account(
+      session: Optional[Session]=None,
+      sts: Optional[STSClient]=None,
+      aws_access_key_id: Optional[str]=None,
+      aws_secret_access_key: Optional[str]=None,
+      aws_session_token: Optional[str]=None,
+      region_name: Optional[str]=None,
+      botocore_session: Optional[botocore.session.Session]=None,
+      profile_name: Optional[str]=None,
+    ) -> str:
+  """Returns the AWS account number string associated with the AWS session
+
+  Args:
+      session (Optional[Session], optional):
+          The AWS session to use. Ignored if sts is provided. If None, a session is created
+          using the remaining parameters. Defaults to None.
+      sts (Optional[STSClient], optional): The AWS secure token service client to use.
+          If None, a new client is created from the AWS session. Defaults to None.
+      aws_access_key_id (Optional[str], optional):
+          The AWS access key ID. Ignored if sts or session is provided. If None,
+          the value is determined from the profile or environment vars. Defaults to None.
+      aws_secret_access_key (Optional[str], optional):
+          The AWS secret access key. Ignored if sts or session is provided. If None,
+          the value is determined from the profile or environment vars. Defaults to None.
+      aws_session_token (Optional[str], optional):
+          The AWS session token. Ignored if sts or session is provided. If None,
+          the value is determined from the profile or environment vars. Defaults to None.
+      region_name (Optional[str], optional):
+          The AWS region name. Ignored if sts or session is provided. If None,
+          the value is determined from the profile or environment vars. Defaults to None.
+      botocore_session (Optional[botocore.session.Session], optional):
+          The botocore session to use as the basis for a session. Ignored if sts or session is provided. If None,
+          a new session is created from defaults and other parameters. Defaults to None.
+      profile_name (Optional[str], optional):
+          The AWS profile name. Ignored if sts or session is provided. If None,
+          the value is determined from environment variables, defaulting to 'default'. Defaults to None.
+
+  Returns:
+      str: The AWS account number expressed as a string
+  """
+  caller_identity = get_aws_caller_identity(
+      session=session,
+      sts=sts,
+      aws_access_key_id=aws_access_key_id,
+      aws_secret_access_key=aws_secret_access_key,
+      aws_session_token=aws_session_token,
+      region_name=region_name,
+      botocore_session=botocore_session,
+      profile_name=profile_name,
+    )
+  return caller_identity['Account']
+
+
 def full_name_of_type(t: Type) -> str:
   """Returns the fully qualified name of a python type
 

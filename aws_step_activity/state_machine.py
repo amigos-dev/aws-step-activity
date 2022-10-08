@@ -21,8 +21,25 @@ from .internal_types import Jsonable, JsonableDict
 import boto3
 from boto3 import Session
 from botocore.exceptions import ReadTimeoutError
-from .util import create_aws_session, full_type, normalize_jsonable_dict, normalize_jsonable_list
-from .sfn_util import create_aws_step_activity, describe_aws_step_activity, describe_aws_step_state_machine
+
+from .util import (
+    create_aws_session,
+    full_type,
+    normalize_jsonable_dict,
+    normalize_jsonable_list,
+    get_aws_account
+  )
+
+from .sfn_util import (
+    create_aws_step_activity,
+    describe_aws_step_activity,
+    delete_aws_step_activity,
+    describe_aws_step_state_machine,
+    is_aws_step_activity_arn,
+    get_aws_step_activity_name_from_arn,
+    create_aws_step_state_machine,
+  )
+
 
 import threading
 from threading import Thread, Lock, Condition
@@ -88,6 +105,158 @@ class AwsStepStateMachine:
 
     desc = describe_aws_step_state_machine(sfn, state_machine_id)
     self._refresh_from_desc(desc)
+
+  @classmethod
+  def create(
+        cls,
+        state_machine_id: str,
+        states: Optional[Dict[str, JsonableDict]]=None,
+        start_at: str= 'Start',
+        comment: Optional[str]=None,
+        state_machine_type: str='STANDARD',
+        tracingEnabled: bool=True,
+        loggingLevel: Optional[str]=None,
+        includeExecutionDataInLogs: Optional[bool]=None,
+        loggingDestinations: Optional[List[JsonableDict]]=None,
+        add_default_cloudwatch_log_destination: bool=True,
+        role_id: Optional[str]=None,
+        role_path: str='/service-role/',
+        assume_role_policy_document: Optional[Union[str, JsonableDict]]=None,
+        role_description: Optional[str]=None,
+        role_max_session_duration: int=3600,
+        role_permissions_boundary: Optional[JsonableDict]=None,
+        role_add_policies: Optional[Dict[str, Optional[Union[str, JsonableDict]]]]=None,
+        role_add_cloudwatch_policy: bool=True,
+        role_add_xray_policy: bool=True,
+        allow_role_exists: bool=True,
+        allow_exists: bool=False,
+        session: Optional[Session]=None,
+        aws_profile: Optional[str]=None,
+        aws_region: Optional[str]=None,
+      ) -> 'AwsStepStateMachine':
+    if loggingLevel is None:
+      loggingLevel='ALL'
+    if session is None:
+      session = Session(profile_name=aws_profile, region_name=aws_region)
+    desc = create_aws_step_state_machine(
+        state_machine_id=state_machine_id,
+        states=states,
+        session=session,
+        start_at=start_at,
+        comment=comment,
+        state_machine_type=state_machine_type,
+        tracingEnabled=tracingEnabled,
+        loggingLevel=loggingLevel,
+        includeExecutionDataInLogs=includeExecutionDataInLogs,
+        loggingDestinations=loggingDestinations,
+        add_default_cloudwatch_log_destination=add_default_cloudwatch_log_destination,
+        role_id=role_id,
+        role_path=role_path,
+        assume_role_policy_document=assume_role_policy_document,
+        role_description=role_description,
+        role_max_session_duration=role_max_session_duration,
+        role_permissions_boundary=role_permissions_boundary,
+        role_add_policies=role_add_policies,
+        role_add_cloudwatch_policy=role_add_cloudwatch_policy,
+        role_add_xray_policy=role_add_xray_policy,
+        allow_role_exists=allow_role_exists,
+        allow_exists=allow_exists,
+      )
+    result = AwsStepStateMachine(desc['stateMachineArn'], session=session)
+    return result
+
+  @classmethod
+  def create_with_activity_choices(
+        cls,
+        state_machine_id: str,
+        activity_ids: Optional[List[str]]=None,
+        default_activity_id: Optional[str]=None,
+        comment: Optional[str]=None,
+        state_machine_type: str='STANDARD',
+        tracingEnabled: bool=True,
+        loggingLevel: Optional[str]=None,
+        includeExecutionDataInLogs: Optional[bool]=None,
+        loggingDestinations: Optional[List[JsonableDict]]=None,
+        add_default_cloudwatch_log_destination: bool=True,
+        role_id: Optional[str]=None,
+        role_path: str='/service-role/',
+        assume_role_policy_document: Optional[Union[str, JsonableDict]]=None,
+        role_description: Optional[str]=None,
+        role_max_session_duration: int=3600,
+        role_permissions_boundary: Optional[JsonableDict]=None,
+        role_add_policies: Optional[Dict[str, Optional[Union[str, JsonableDict]]]]=None,
+        role_add_cloudwatch_policy: bool=True,
+        role_add_xray_policy: bool=True,
+        allow_role_exists: bool=True,
+        allow_exists: bool=False,
+        heartbeat_seconds: Optional[int]=None,
+        timeout_seconds: Optional[int]=None,
+        session: Optional[Session]=None,
+        aws_profile: Optional[str]=None,
+        aws_region: Optional[str]=None,
+      ) -> 'AwsStepStateMachine':
+    variable = '$.activity'
+    if session is None:
+      session = Session(profile_name=aws_profile, region_name=aws_region)
+    sfn = session.client('stepfunctions')
+    choices: List[JsonableDict] = []
+    if activity_ids is None:
+      activity_ids = []
+    activity_map: Dict[str, str] = {}  # map from activity name to activity ARN
+    default_activity_name: Optional[str] = None
+    if not default_activity_id is None:
+      default_activity_info = create_aws_step_activity(sfn, default_activity_id, allow_exists=True)
+      default_activity_arn = default_activity_info['activityArn']
+      default_activity_name = default_activity_info['name']
+      activity_map[default_activity_name] = default_activity_arn
+    for activity_id in activity_ids:
+      activity_info = create_aws_step_activity(sfn, activity_id, allow_exists=True)
+      activity_arn = activity_info['activityArn']
+      activity_map[activity_info['name']] = activity_arn
+
+    choices: List[JsonableDict] = []
+    if not default_activity_name is None:
+      choices.append(dict(IsPresent=False, Next=f'Run-{default_activity_name}', Variable=variable))
+    for activity_name in sorted(activity_map.keys()):
+      choices.append(dict(StringEquals=activity_name, Next=f'Run-{activity_name}', Variable=variable))
+
+    states = dict(
+        Start=dict(Type='Pass', Next='SelectActivity'),
+        SelectActivity=dict(Type='Choice', Choices=choices),
+        Final=dict(Type='Pass', End=True)
+      )
+    for activity_name, activity_arn in activity_map.items():
+      state = dict(Type='Task', Next='Final', Resource=activity_arn)
+      if not heartbeat_seconds is None:
+        state['HeartbeatSeconds'] = heartbeat_seconds
+      if not timeout_seconds is None:
+        state['TimeoutSeconds'] = timeout_seconds
+      states[f'Run-{activity_name}'] = state
+    result = cls.create(
+          state_machine_id=state_machine_id,
+          states=states,
+          session=session,
+          start_at='Start',
+          comment=comment,
+          state_machine_type=state_machine_type,
+          tracingEnabled=tracingEnabled,
+          loggingLevel=loggingLevel,
+          includeExecutionDataInLogs=includeExecutionDataInLogs,
+          loggingDestinations=loggingDestinations,
+          add_default_cloudwatch_log_destination=add_default_cloudwatch_log_destination,
+          role_id=role_id,
+          role_path=role_path,
+          assume_role_policy_document=assume_role_policy_document,
+          role_description=role_description,
+          role_max_session_duration=role_max_session_duration,
+          role_permissions_boundary=role_permissions_boundary,
+          role_add_policies=role_add_policies,
+          role_add_cloudwatch_policy=role_add_cloudwatch_policy,
+          role_add_xray_policy=role_add_xray_policy,
+          allow_role_exists=allow_role_exists,
+          allow_exists=allow_exists,
+        )
+    return result
 
   @property
   def comment(self) -> str:
@@ -254,6 +423,22 @@ class AwsStepStateMachine:
         heartbeat_seconds=heartbeat_seconds,
         heartbeat_seconds_path=heartbeat_seconds_path)
 
+  def del_activity_state(
+        self,
+        state_name: str,
+        delete_activity: bool=False
+      ):
+    state = self.get_state(state_name)
+    state_type = state['Type']
+    if state_type != 'Task':
+      raise RuntimeError(f'State "{state_name}" Type is not "Task": "{state_type}"')
+    activity_arn = state['Resource']
+    if not is_aws_step_activity_arn(activity_arn):
+      raise RuntimeError(f'State "{state_name}" task Resource is not an activity ARN: "{activity_arn}"')
+    self.del_state(state_name)
+    if delete_activity:
+      self.delete_activity(activity_arn, must_exist=False)
+
   def describe_activity(
         self,
         activity_id: str
@@ -263,17 +448,17 @@ class AwsStepStateMachine:
   def create_activity(
         self,
         activity_id: str,
-        allow_exists: bool=False
+        allow_exists: bool=True,
       ) -> JsonableDict:
-    if allow_exists:
-      try:
-        result = self.describe_activity(activity_id)
-        return result
-      except RuntimeError as ex:
-        if not str(ex).endswith('was not found'):
-          raise
-    result = create_aws_step_activity(self.sfn, activity_id)
+    result = create_aws_step_activity(self.sfn, activity_id, allow_exists=allow_exists)
     return result
+
+  def delete_activity(
+        self,
+        activity_id: str,
+        must_exist: bool=False
+      ) -> None:
+    delete_aws_step_activity(self.sfn, activity_id, must_exist=must_exist)
 
   def is_choice_state(self, state_name: str) -> bool:
     state = self.get_state(state_name)
