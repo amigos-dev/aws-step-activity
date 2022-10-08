@@ -35,6 +35,7 @@ import urllib.parse
 
 from .util import (
     create_aws_session,
+    full_type,
     normalize_jsonable_dict,
     normalize_jsonable_list,
     get_aws_account,
@@ -448,7 +449,7 @@ def create_aws_step_state_machine(
 
   tracingConfiguration: TracingConfigurationTypeDef = dict(enabled=not not tracingEnabled)
 
-  print(f'Creating state machine "{state_machine_name}"; roleArn="{role_arn}"; definition={json.dumps(definition, sort_keys=True)}')
+  logger.debug(f'Creating state machine "{state_machine_name}"; roleArn="{role_arn}"; definition={json.dumps(definition, sort_keys=True)}')
 
   # Unfortunately create_state_machine will fail if the role has just been created and the attached
   # policies have not had time to propogate.  So, we will retry for a little while.
@@ -465,8 +466,10 @@ def create_aws_step_state_machine(
         )
       break
     except ClientError as ex:
-      if retry_count > 3 or ex.response['Error']['Code'] != 'AccessDenied':
+      if retry_count > 6 or ex.response['Error']['Code'] != 'AccessDeniedException':
+        logger.warning(f'Error creating state machine, retry_count={retry_count}, exception class={full_type(ex)}, Error code="{ex.response["Error"]["Code"]}", roleArn="{role_arn}",definition={json.dumps(definition, sort_keys=True)}"')
         raise
+      logger.info(f'Access denied creating state machine, possible AWS still syncing policies; retry_count={retry_count}, exception class={full_type(ex)}, Error code="{ex.response["Error"]["Code"]}", roleArn="{role_arn}",definition={json.dumps(definition, sort_keys=True)}"')
       retry_count += 1
       time.sleep(3)
 
