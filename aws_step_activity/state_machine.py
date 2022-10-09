@@ -10,7 +10,7 @@ from .logging import logger
 
 import sys
 from time import sleep
-from typing import TYPE_CHECKING, Optional, Dict, Type, Union, List, Tuple
+from typing import TYPE_CHECKING, Optional, Dict, Type, Union, List, Tuple, Set
 from types import TracebackType
 
 from mypy_boto3_stepfunctions.client import SFNClient, Exceptions as SFNExceptions
@@ -298,6 +298,7 @@ class AwsStepStateMachine:
     tracingConfiguration: TracingConfigurationTypeDef = normalize_jsonable_dict(self.state_machine_desc['tracingConfiguration'])
     if not tracingEnabled is None:
       tracingConfiguration['enabled'] = tracingEnabled
+    logger.debug(f'Updating state machine {self.state_machine_name}, roleArn="{roleArn}, definition={json.dumps(definition, sort_keys=True, indent=2)}"')
     self.sfn.update_state_machine(
         stateMachineArn=self.state_machine_arn,
         definition=definition_str,
@@ -341,6 +342,9 @@ class AwsStepStateMachine:
 
   def del_state(self, name: str):
     states = normalize_jsonable_dict(self.states)
+    if name in states:
+      del states[name]
+    self.set_states(states)
 
   def set_state(self, name: str, state: JsonableDict):
     states = normalize_jsonable_dict(self.states)
@@ -389,11 +393,11 @@ class AwsStepStateMachine:
 
   def set_activity_state(
         self,
-        state_name: str,
         activity_id: str,
+        state_name: Optional[str]=None,
         create_activity: bool=True,
         allow_activity_exists: bool=True,
-        next_state: Optional[str]=None,
+        next_state: Optional[str]='Final',
         parameters: Optional[JsonableDict]=None,
         result_path: Optional[str]=None,
         result_selector: Optional[JsonableDict]=None,
@@ -408,6 +412,9 @@ class AwsStepStateMachine:
       activity_desc = self.create_activity(activity_id, allow_exists=allow_activity_exists)
     else:
       activity_desc = self.describe_activity(activity_id)
+    activity_name = activity_desc['name']
+    if state_name is None:
+      state_name = f'Run-{activity_name}'
     resource_arn = activity_desc['activityArn']
     self.set_task_state(
         state_name,
@@ -546,11 +553,21 @@ class AwsStepStateMachine:
         raise RuntimeError(f'Choice value {json.dumps(choice_value)} is not present in choice state "{state_name}"')
     return next_states[choice_value]
 
-  def set_param_choice_next_states(self, state_name: str, param_name: str, next_states: Dict[Optional[str], str]):
+  def set_param_choice_next_states(self, state_name: str, param_name: Optional[str], next_states: Dict[Optional[str], str]):
+    old_next_states: Set[str] = set()
+    new_next_states = set(next_states.values())
     state = self.get_state(state_name)
     if state['Type'] != 'Choice':
       raise RuntimeError(f'State "{state_name}" is not a Choice state')
+    for old_choice in state['Choices']:
+      if param_name is None and 'Variable' in old_choice:
+        vn: str = old_choice['Variable']
+        if vn.startswith('$.'):
+          param_name = vn[2:]
+      old_next_states.add(old_choice['Next'])
     choices: List[JsonableDict] = []
+    if param_name is None:
+      raise RuntimeError("param_name cannot be inferred from previous Choice state")
     vn = f"$.{param_name}"
     if None in next_states:
       choices.append(dict(Variable=vn, IsPresent=False, Next=next_states[None]))
@@ -558,6 +575,129 @@ class AwsStepStateMachine:
     for choice_value in sorted(x for x in next_states.keys() if not x is None):
       choices.append(dict(Variable=vn, StringEquals=choice_value, Next=next_states[choice_value]))
     self.set_state_choices(state_name, choices)
+    # delete all the states that are no longer referenced by the choices
+    deleted_states = old_next_states.difference(new_next_states)
+    if len(deleted_states) > 0:
+      logger.debug(f'Choice State "{state_name}": next states {list(deleted_states)} are no longer referenced and will be deleted')
+    for deleted_state in deleted_states:
+      self.del_state(deleted_state)
+
+  def get_activity_choices(
+        self,
+        state_name: str="SelectActivity",
+      ) -> Tuple[List[str], Optional[str]]:
+    """Returns the list of activity names selectable by an activity choice state, and the default choice (if any).
+
+    Args:
+        state_name (str, optional): The activity choice state name. Defaults to "SelectActivity".
+
+    Raises:
+        RuntimeError: The state is not a valid activity choice state
+
+    Returns:
+        Tuple[List[str], Optional[str]]: A Tuple consisting of:
+           [0]: A list of activity names that may be selected explicitly by this Choice state
+           [1]: The default activity name that is selected by this Choice state. If None, there is no default.
+    """
+    param_name, choice_map = self.get_param_choice_next_states(state_name)
+    default_activity_name: Optional[str] = None
+    activity_names: Set[str] = set()
+    for activity_name, next_state in choice_map.items():
+      next_state_info = self.get_state(next_state)
+      if next_state_info['Type'] != 'Task':
+        raise RuntimeError(f'State "{state_name}" next state "{next_state}" is not a Task state')
+      next_activity_arn = next_state_info['Resource']
+      if not is_aws_step_activity_arn(next_activity_arn):
+        raise RuntimeError(f'State "{state_name}" next state "{next_state}" is not an activity Task state')
+      actual_activity_name = get_aws_step_activity_name_from_arn(next_activity_arn)
+      if not activity_name is None and activity_name != actual_activity_name:
+        raise RuntimeError(f'State "{state_name}" choice "{activity_name}" does not match activity name in target state "{actual_activity_name}"')
+      activity_names.add(actual_activity_name)
+      if activity_name is None:
+        default_activity_name = actual_activity_name
+    return sorted(activity_names), default_activity_name
+
+  def set_activity_choices(
+        self,
+        state_name: str="SelectActivity",
+        param_name: Optional[str]="activity",
+        activity_ids: Optional[List[str]]=None,
+        default_activity_id: Optional[str]=None,
+        activity_next_state: Optional[str]='::FinalOrNone::'
+      ):
+    if activity_next_state == '::FinalOrNone::':
+      activity_next_state = 'Final' if 'Final' in self.states else None
+    if activity_ids is None:
+      activity_ids = []
+    activity_map: Dict[str, str] = {}  # map from activity name to activity ARN
+    default_activity_name: Optional[str] = None
+    if not default_activity_id is None:
+      default_activity_info = create_aws_step_activity(self.sfn, default_activity_id, allow_exists=True)
+      default_activity_arn = default_activity_info['activityArn']
+      default_activity_name = default_activity_info['name']
+      activity_map[default_activity_name] = default_activity_arn
+    for activity_id in activity_ids:
+      activity_info = create_aws_step_activity(self.sfn, activity_id, allow_exists=True)
+      activity_arn = activity_info['activityArn']
+      activity_map[activity_info['name']] = activity_arn
+    next_states: Dict[Optional[str], str] = {}
+    if not default_activity_name is None:
+      next_states[None] = f'Run-{default_activity_name}'
+    for activity_name in sorted(activity_map.keys()):
+      next_states[activity_name] = f'Run-{activity_name}'
+    for choice_next_state in next_states.values():
+      if not choice_next_state in self.states:
+        activity_name = choice_next_state[4:]
+        self.set_activity_state(activity_name, choice_next_state, next_state=activity_next_state)
+    self.set_param_choice_next_states(state_name, param_name, next_states)
+
+  def add_activity_choice(
+        self,
+        activity_id: str,
+        state_name: str="SelectActivity",
+        param_name: Optional[str]="activity",
+        is_default: bool=False,
+        activity_next_state: Optional[str]='::FinalOrNone::'
+      ):
+    activity_name_list, default_activity = self.get_activity_choices(state_name)
+    activity_info = create_aws_step_activity(self.sfn, activity_id, allow_exists=True)
+    activity_name = activity_info['name']
+    activity_arn = activity_info['activityArn']
+    activity_names = set(activity_name_list)
+    activity_names.add(activity_name)
+    if is_default:
+      default_activity = activity_name
+    else:
+      if default_activity == activity_name:
+        default_activity = None
+    self.set_activity_choices(
+        state_name=state_name,
+        param_name=param_name,
+        activity_ids=sorted(activity_names),
+        default_activity_id=default_activity,
+        activity_next_state=activity_next_state
+      )
+
+  def del_activity_choice(
+        self,
+        activity_id: str,
+        state_name: str="SelectActivity",
+        param_name: Optional[str]="activity",
+        activity_next_state: Optional[str]='::FinalOrNone::'
+      ):
+    activity_name = get_aws_step_activity_name_from_arn(activity_id) if ':' in activity_id else activity_id
+    activity_name_list, default_activity = self.get_activity_choices(state_name)
+    activity_names = set(activity_name_list)
+    if default_activity == activity_name:
+      default_activity = None
+    activity_names.discard(activity_name)
+    self.set_activity_choices(
+        state_name=state_name,
+        param_name=param_name,
+        activity_ids=sorted(activity_names),
+        default_activity_id=default_activity,
+        activity_next_state=activity_next_state
+      )
 
   def set_param_choice_next_state(self, state_name: str, choice_value:Optional[str], next_state: str, param_name:Optional[str]=None):
     actual_param_name, next_states = self.get_param_choice_next_states(state_name)

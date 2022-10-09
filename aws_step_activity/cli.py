@@ -83,6 +83,7 @@ class CommandLineInterface:
   _sfn: Optional[SFNClient] = None
   _activity_id: Optional[str] = None
   _state_machine_id: Optional[str] = None
+  _state_machine: Optional[AwsStepStateMachine] = None
 
   def __init__(self, argv: Optional[Sequence[str]]=None):
     self._argv = argv
@@ -124,11 +125,18 @@ class CommandLineInterface:
     if self._state_machine_id is None:
       state_machine_id: Optional[str] = self._args.state_machine_id
       if state_machine_id is None:
-        state_machine_id = os.environ.get('AWS_STEP_STATE_MACHINE_ID', None)
+        state_machine_id = self._args.pre_state_machine_id
         if state_machine_id is None:
-          raise RuntimeError(f'An AWS stepfunctions state machine name or ARN is required; either provide with --state-machine-id or set environment variable AWS_STEP_STATE_MACHINE_ID')
+          state_machine_id = os.environ.get('AWS_STEP_STATE_MACHINE_ID', None)
+          if state_machine_id is None:
+            raise RuntimeError(f'An AWS stepfunctions state machine name or ARN is required; either provide with --state-machine-id or set environment variable AWS_STEP_STATE_MACHINE_ID')
       self._state_machine_id = state_machine_id
     return self._state_machine_id
+
+  def get_state_machine(self) -> AwsStepStateMachine:
+    if self._state_machine is None:
+      self._state_machine = AwsStepStateMachine(self.get_state_machine_id(), session=self.get_aws_session())
+    return self._state_machine
 
   def pretty_print(
         self,
@@ -234,16 +242,6 @@ class CommandLineInterface:
     return 0
 
   def cmd_create_chooser(self) -> int:
-    '''
-    parser_create_chooser.add_argument('--heartbeat-seconds', type=float, default=None,
-                        help='The default interval for sending heartbeats, in seconds. By default, the AWS stepfunction default is used.')
-    parser_create_chooser.add_argument('--timeout-seconds', type=float, default=None,
-                        help='The default maximum execution runtime, in seconds. By default, No limit is imposed.')
-    parser_create_chooser.add_argument('--default-activity-id', default=None,
-                        help='The default chosen activity if none is selected in a job. By default, an error will result if none is chosen.')
-    parser_create_chooser.add_argument('choice_activity_ids', nargs=argparse.REMAINDER, default=[],
-                        help='A list of activity names or ARNs that consitute named choices for the state machine.')
-    '''
     args = self._args
     state_machine_id = self.get_state_machine_id()
     heartbeat_seconds: Optional[float] = args.heartbeat_seconds
@@ -258,7 +256,50 @@ class CommandLineInterface:
         timeout_seconds=None if timeout_seconds is None else round(timeout_seconds),
         session = self.get_aws_session()
       )
+    self._state_machine = state_machine
     self.pretty_print(dict(arn=state_machine.state_machine_arn))
+    return 0
+
+  def cmd_describe_activity_chooser(self) -> int:
+    args = self._args
+    state_machine = self.get_state_machine()
+    activity_names, default_activity_name = state_machine.get_activity_choices()
+    result: JsonableDict = dict(
+        activity_names=activity_names,
+        param_name='activity',
+        state_machine_arn=state_machine.state_machine_arn,
+        state_machine_name=state_machine.state_machine_name,
+        choice_state='SelectActivity',
+        )
+    if not default_activity_name is None:
+      result['default_activity_name'] = default_activity_name
+    self.pretty_print(result)
+    return 0
+
+  def cmd_update_chooser(self) -> int:
+    args = self._args
+    default_activity_id: Optional[str] = args.default_activity_id
+    activity_ids: List[str] = args.choice_activity_ids
+    state_machine = self.get_state_machine()
+    state_machine.set_activity_choices(activity_ids=activity_ids, default_activity_id=default_activity_id)
+    state_machine.flush()
+    return 0
+
+  def cmd_add_activity_choice(self) -> int:
+    args = self._args
+    activity_id: str = args.choice_activity_id
+    is_default: bool = args.is_default_activity_id
+    state_machine = self.get_state_machine()
+    state_machine.add_activity_choice(activity_id, is_default=is_default)
+    state_machine.flush()
+    return 0
+
+  def cmd_del_activity_choice(self) -> int:
+    args = self._args
+    activity_id: str = args.choice_activity_id
+    state_machine = self.get_state_machine()
+    state_machine.del_activity_choice(activity_id)
+    state_machine.flush()
     return 0
 
   def run(self) -> int:
@@ -299,7 +340,7 @@ class CommandLineInterface:
                         help='The AWS profile to use. Default is to use the default AWS settings')
     parser.add_argument('--aws-region', default=None,
                         help='The AWS region to use. Default is to use the default AWS region for the selected profile')
-    parser.add_argument('-m', '--state-machine-id', default=None,
+    parser.add_argument('-m', '--state-machine-id', dest='pre_state_machine_id', default=None,
                         help='The AWS Step Function state machine name or state machine ARN. By default, environment variable AWS_STEP_STATE_MACHINE is used.')
     parser.add_argument('-a', '--activity-id', default=None,
                         help='The AWS Step Function Activity name or Activity ARN. By default, environment variable AWS_STEP_ACTIVITY_ID is used.')
@@ -344,6 +385,46 @@ class CommandLineInterface:
                         help='A list of activity names or ARNs that consitute named choices for the state machine.')
     parser_create_chooser.set_defaults(func=self.cmd_create_chooser)
 
+    # ======================= describe-activity-chooser
+
+    parser_describe_activity_chooser = subparsers.add_parser('describe-activity-chooser',
+                            description='''Displays choices for a simple AWS stepfunction state machine that chooses between a list of activities.''')
+    parser_describe_activity_chooser.add_argument('-m', '--state-machine-id', default=None,
+                        help='The AWS Step Function state machine name or state machine ARN. By default, environment variable AWS_STEP_STATE_MACHINE is used.')
+    parser_describe_activity_chooser.set_defaults(func=self.cmd_describe_activity_chooser)
+
+    # ======================= update-activity-chooser
+
+    parser_update_chooser = subparsers.add_parser('update-activity-chooser',
+                            description='''Update the activity choiices for a simple AWS stepfunction state machine that chooses between a list of activities.''')
+    parser_update_chooser.add_argument('--default-activity-id', default=None,
+                        help='The default chosen activity if none is selected in a job. By default, an error will result if none is chosen.')
+    parser_update_chooser.add_argument('choice_activity_ids', nargs=argparse.REMAINDER, default=[],
+                        help='A list of activity names or ARNs that consitute named choices for the state machine.')
+    parser_update_chooser.set_defaults(func=self.cmd_update_chooser)
+
+    # ======================= add-activity-choice
+
+    parser_add_activity_choice = subparsers.add_parser('add-activity-choice',
+                            description='''Adds an activity choice to a simple AWS stepfunction state machine, and optionally sets it as the default choice.''')
+    parser_add_activity_choice.add_argument('--default', dest='is_default_activity_id', action='store_true', default=False,
+                            help='If provided, the activity will be the default activity. By default, the activity will not be used as the default activity.')
+    parser_add_activity_choice.add_argument('-m', '--state-machine-id', default=None,
+                        help='The AWS Step Function state machine name or state machine ARN. By default, environment variable AWS_STEP_STATE_MACHINE is used.')
+    parser_add_activity_choice.add_argument('choice_activity_id',
+                        help='The activity name or ARN of the activity to be added as a choice. The activity will be created if it does not exist.')
+    parser_add_activity_choice.set_defaults(func=self.cmd_add_activity_choice)
+
+    # ======================= del-activity-choice
+
+    parser_del_activity_choice = subparsers.add_parser('del-activity-choice',
+                            description='''Deletes an activity choice from a simple AWS stepfunction state machine.''')
+    parser_del_activity_choice.add_argument('-m', '--state-machine-id', default=None,
+                        help='The AWS Step Function state machine name or state machine ARN. By default, environment variable AWS_STEP_STATE_MACHINE is used.')
+    parser_del_activity_choice.add_argument('choice_activity_id',
+                        help='The activity name or ARN of the activity to be deleted as a choice.')
+    parser_del_activity_choice.set_defaults(func=self.cmd_del_activity_choice)
+
     # ======================= run
 
     parser_run = subparsers.add_parser('run',
@@ -371,24 +452,12 @@ class CommandLineInterface:
     except ArgparseExitError as ex:
       return ex.exit_code
     logging.basicConfig(level=args.loglevel.upper())
-    logging.getLogger('botocore.hooks').setLevel(logging.INFO)
-    logging.getLogger('botocore.parsers').setLevel(logging.INFO)
-    logging.getLogger('botocore.auth').setLevel(logging.INFO)
-    logging.getLogger('botocore.endpoint').setLevel(logging.INFO)
-    logging.getLogger('botocore.httpsession').setLevel(logging.INFO)
-    logging.getLogger('botocore.loaders').setLevel(logging.INFO)
-    logging.getLogger('botocore.credentials').setLevel(logging.INFO)
-    logging.getLogger('botocore.retryhandler').setLevel(logging.INFO)
-    logging.getLogger('botocore.utils').setLevel(logging.INFO)
-    logging.getLogger('botocore.client').setLevel(logging.INFO)
-    logging.getLogger('botocore.session').setLevel(logging.INFO)
-    logging.getLogger('botocore.handlers').setLevel(logging.INFO)
-    logging.getLogger('botocore.awsrequest').setLevel(logging.INFO)
-    logging.getLogger('botocore.regions').setLevel(logging.INFO)
-    logging.getLogger('urllib3.connectionpool').setLevel(logging.INFO)
-    logging.getLogger('s3transfer.utils').setLevel(logging.INFO)
-    logging.getLogger('s3transfer.tasks').setLevel(logging.INFO)
-    logging.getLogger('s3transfer.futures').setLevel(logging.INFO)
+    for modname in [
+      'botocore.hooks','botocore.parsers','botocore.auth','botocore.endpoint','botocore.httpsession',
+      'botocore.loaders','botocore.credentials','botocore.retryhandler','botocore.utils','botocore.client',
+      'botocore.session','botocore.handlers','botocore.awsrequest','botocore.regions','urllib3.connectionpool',
+      's3transfer.utils','s3transfer.tasks','s3transfer.futures']:
+      logging.getLogger(modname).setLevel(logging.INFO)
     traceback: bool = args.traceback
     try:
       self._args = args
