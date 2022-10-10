@@ -583,3 +583,99 @@ def get_aws_step_activity_name_from_arn(arn: str) -> str:
   if not m:
     raise RuntimeError(f'Invalid AWS stepfunction activity ARN: "{arn}"')
   return m.group('activity_name')
+
+# arn:aws:states:us-west-2:745019234935:execution:TestRunSelectedActivity:9de2711e-06a3-44d2-b95e-9a93599bd1f8
+_execution_arn_re = re.compile(r'^arn:aws:states:(?P<region>[a-z][a-z0-9\-]+):(?P<account>[0-9]+):execution:(?P<state_machine_name>[^ \t\r\n<>{}[\]?*"#%\\^|~`$,;:/]+):(?P<execution_name>[^ \t\r\n<>{}[\]?*"#%\\^|~`$,;:/]+)$')
+
+def is_aws_step_execution_arn(arn: str) -> bool:
+  return not _execution_arn_re.match(arn) is None
+
+def get_aws_step_state_machine_and_execution_names_from_arn(arn: str) -> Tuple[str, str]:
+  m = _execution_arn_re.match(arn)
+  if not m:
+    raise RuntimeError(f'Invalid AWS stepfunction execution ARN: "{arn}"')
+  return m.group('state_machine_name'), m.group('execution_name')
+
+# arn:aws:states:us-west-2:745019234935:stateMachine:TestRunSelectedActivity
+_state_machine_arn_re = re.compile(r'^arn:aws:states:(?P<region>[a-z][a-z0-9\-]+):(?P<account>[0-9]+):stateMachine:(?P<state_machine_name>[^ \t\r\n<>{}[\]?*"#%\\^|~`$,;:/]+)$')
+
+def is_aws_step_state_machine_arn(arn: str) -> bool:
+  return not _state_machine_arn_re.match(arn) is None
+
+def get_aws_step_state_machine_name_from_arn(arn: str) -> str:
+  m = _state_machine_arn_re.match(arn)
+  if not m:
+    raise RuntimeError(f'Invalid AWS stepfunction state machine ARN: "{arn}"')
+  return m.group('state_machine_name')
+
+def describe_aws_step_execution(
+      sfn: SFNClient,
+      execution_id: str,
+      state_machine_id: Optional[str]=None,
+    ) -> JsonableDict:
+  """Returns the result of SFNClient.describe_execution() for the given state machine name or ARN.
+
+  Args:
+      sfn (SFNClient):
+          The boto3 client for AWS step functions
+      state_machine_id (str):
+          Either an AWS step function execution name, or its ARN
+      state_machine_id (str):
+         Either an AWS step function state machine name, or its ARN. May be None
+         if state_machine_id is an ARN. Default is None.
+
+  Raises:
+      RuntimeError: The specified execution_id does not exist.
+      RuntimeError: The specified state_machine_id does not exist.
+
+  Returns:
+      JsonableDict: a dict as returned by SFNClient.describe_execution; e.g.:
+
+          {
+              "executionArn": "arn:aws:states:us-west-2:745019234935:execution:TestRunSelectedActivity:9de2711e-06a3-44d2-b95e-9a93599bd1f8",
+              "stateMachineArn": "arn:aws:states:us-west-2:745019234935:stateMachine:TestRunSelectedActivity",
+              "name": "9de2711e-06a3-44d2-b95e-9a93599bd1f8",
+              "status": "TIMED_OUT",
+              "startDate": "2022-10-09T17:36:00.742000-07:00",
+              "stopDate": "2022-10-09T17:46:00.743000-07:00",
+              "input": "{ \"Comment\": \"foo\" }",
+              "inputDetails": {
+                  "included": true
+              },
+              "traceHeader": "Root=1-634368f0-fd3bef0eed732a65fb6e51fb;Sampled=1"
+          }
+  """
+  execution_arn: str
+  if ':' in execution_id:
+    execution_arn = execution_id
+  else:
+    state_machine_arn: str
+    if state_machine_id is None:
+      raise RuntimeError("state_machine_id must be provided if execution_id is not an ARN")
+    if ':' in state_machine_id:
+      # state_machine_id must be an ARN.
+      state_machine_arn = state_machine_id
+    else:
+      # state_machine_id must be a state machine name. Enumerate all state machines and
+      # find the matching name
+      state_machine_name_to_arn: Dict[str, str] = {}
+      paginator = sfn.get_paginator('list_state_machines')
+      page_iterator = paginator.paginate()
+      for page in page_iterator:
+        for state_machine_desc in page['stateMachines']:
+          state_machine_name_to_arn[state_machine_desc['name']] = state_machine_desc['stateMachineArn']
+      if not state_machine_id in state_machine_name_to_arn:
+        raise RuntimeError(f"AWS stepfunctions state machine name '{state_machine_id}' was not found")
+      state_machine_arn = state_machine_name_to_arn[state_machine_id]
+    m = _state_machine_arn_re.match(state_machine_arn)
+    if not m:
+      raise RuntimeError(f'Invalid AWS stepfunction state machine ARN: "{state_machine_arn}"')
+    state_machine_name = m.group('state_machine_name')
+    aws_region = m.group('region')
+    aws_account = m.group('account')
+    execution_arn=f'arn:aws:states:{aws_region}:{aws_account}:execution:{state_machine_name}:{execution_id}'
+
+  resp = sfn.describe_execution(executionArn=execution_arn)
+  result = normalize_jsonable_dict(resp)
+
+  return result

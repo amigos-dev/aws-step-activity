@@ -365,6 +365,25 @@ class CommandLineInterface:
     self.pretty_print(result)
     return 0
 
+  def cmd_list_executions(self) -> int:
+    args = self._args
+    max_results: int = args.max_results
+    status_filter: Optional[str] = args.status_filter
+    next_token: Optional[str] = args.next_token
+    state_machine = self.get_state_machine()
+    result = state_machine.list_some_executions(max_results=max_results, next_token=next_token, status_filter=status_filter)
+    self.pretty_print(result)
+    return 0
+
+  def cmd_describe_execution(self) -> int:
+    args = self._args
+    execution_name: str = args.execution_name
+
+    state_machine = self.get_state_machine()
+    result = state_machine.describe_execution(execution_name)
+    self.pretty_print(result)
+    return 0
+
   def cmd_sign_s3_upload(self) -> int:
     args = self._args
     s3_url: str = args.s3_url
@@ -548,6 +567,31 @@ class CommandLineInterface:
                         help='The input data, as a filename, to pass to the new execution. By default, "{}" is used as data.')
     parser_start_execution.set_defaults(func=self.cmd_start_execution)
 
+    # ======================= describe-execution
+
+    parser_describe_execution = subparsers.add_parser('describe-execution',
+                            description='''Gets the status of a specific execution of an AWS stepfunction state machine.''')
+    parser_describe_execution.add_argument('-m', '--state-machine-id', default=None,
+                        help='The AWS Step Function state machine name or state machine ARN. By default, environment variable AWS_STEP_STATE_MACHINE is used.')
+    parser_describe_execution.add_argument('execution_name',
+                        help='The name of the execution.')
+    parser_describe_execution.set_defaults(func=self.cmd_describe_execution)
+
+    # ======================= list-executions
+
+    parser_list_executions = subparsers.add_parser('list-executions',
+                            description='''Lists a subset of the executions associated with the state machine.''')
+    parser_list_executions.add_argument('-m', '--state-machine-id', default=None,
+                        help='The AWS Step Function state machine name or state machine ARN. By default, environment variable AWS_STEP_STATE_MACHINE is used.')
+    parser_list_executions.add_argument('-n', '--max-results', type=int, default=1000,
+                        help='The maximum number of results to return. Must be <= 1000. By default, 1000 is used.')
+    parser_list_executions.add_argument('-s', '--status', dest='status_filter', default=None,
+                        help='The a filter for matching status values. By default, all executions are returned regardless of status.')
+    parser_list_executions.add_argument('-t', '--next-token', default=None,
+                        help='The nextToken value from the previous invocation, to continue listing. By default, starts at the beginning.')
+    parser_list_executions.set_defaults(func=self.cmd_list_executions)
+
+
     # ======================= sign-s3-upload
 
     parser_sign_s3_upload = subparsers.add_parser('sign-s3-upload',
@@ -596,6 +640,8 @@ class CommandLineInterface:
       return ex.exit_code
     logging.basicConfig(level=args.loglevel.upper())
     logLevel = logging.getLogger().level
+    # Restrict loglevel of boto3 and urllib3 modules because they are very chatty
+    # and it is hard to find our log messages amongst the noise
     for modname in [
       'botocore.hooks','botocore.parsers','botocore.auth','botocore.endpoint','botocore.httpsession',
       'botocore.loaders','botocore.retryhandler','botocore.utils','botocore.client',

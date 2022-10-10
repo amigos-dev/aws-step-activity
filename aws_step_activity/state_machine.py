@@ -10,7 +10,7 @@ from .logging import logger
 
 import sys
 from time import sleep
-from typing import TYPE_CHECKING, Optional, Dict, Type, Union, List, Tuple, Set
+from typing import TYPE_CHECKING, Optional, Dict, Type, Union, List, Tuple, Set, Any, Generator
 from types import TracebackType
 
 from mypy_boto3_stepfunctions.client import SFNClient, Exceptions as SFNExceptions
@@ -35,9 +35,11 @@ from .sfn_util import (
     describe_aws_step_activity,
     delete_aws_step_activity,
     describe_aws_step_state_machine,
+    describe_aws_step_execution,
     is_aws_step_activity_arn,
     get_aws_step_activity_name_from_arn,
     create_aws_step_state_machine,
+    get_aws_step_state_machine_and_execution_names_from_arn,
   )
 
 
@@ -827,3 +829,47 @@ class AwsStepStateMachine:
     result['state_machine_arn'] = self.state_machine_arn
     result['state_machine_name'] = self.state_machine_name
     return result
+
+  def describe_execution(
+        self,
+        execution_id: str,
+      ) -> JsonableDict:
+    resp = describe_aws_step_execution(
+        self.sfn,
+        execution_id,
+        state_machine_id=self.state_machine_arn
+      )
+    result = normalize_jsonable_dict(resp)
+    state_machine_name, execution_name = get_aws_step_state_machine_and_execution_names_from_arn(result['executionArn'])
+    result['state_machine_name'] = state_machine_name
+    result['execution_name'] = execution_name
+    return result
+
+  def list_some_executions(
+        self,
+        max_results: int=1000,
+        next_token: Optional[str]=None,
+        status_filter: Optional[str]=None
+      ) -> JsonableDict:
+    params: Dict[str, Any] = dict(stateMachineArn=self.state_machine_arn, maxResults=max_results)
+    if not next_token is None:
+      params['nextToken'] = next_token
+    if not status_filter is None:
+      params['statusFilter'] = status_filter
+    resp = self.sfn.list_executions(**params)
+    result = normalize_jsonable_dict(resp)
+    return result
+
+  def iter_executions(
+        self,
+        next_token: Optional[str]=None,
+        status_filter: Optional[str]=None
+      ) -> Generator[JsonableDict, None, None]:
+    params: Dict[str, Any] = dict(stateMachineArn=self.state_machine_arn, maxResults=max_results)
+    if not status_filter is None:
+      params['statusFilter'] = status_filter
+    paginator = self.sfn.get_paginator('list_executions')
+    page_iterator = paginator.paginate(**params)
+    for page in page_iterator:
+      for execution_desc in page['executions']:
+        yield normalize_jsonable_dict(execution_desc)
