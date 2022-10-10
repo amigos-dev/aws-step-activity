@@ -11,6 +11,7 @@ from typing import (
     cast, Any, Iterator, Iterable, Tuple, ItemsView, ValuesView, KeysView, Type )
 
 import logging
+import uuid
 from .logging import logger
 
 import os
@@ -245,15 +246,25 @@ class CommandLineInterface:
     args = self._args
     state_machine_id = self.get_state_machine_id()
     heartbeat_seconds: Optional[float] = args.heartbeat_seconds
+    if heartbeat_seconds == 0.0:
+      heartbeat_seconds = None
     timeout_seconds: Optional[float] = args.timeout_seconds
+    if timeout_seconds == 0.0:
+      timeout_seconds = None
+    activity_timeout_seconds: Optional[float] = args.activity_timeout_seconds
+    if activity_timeout_seconds is None:
+      activity_timeout_seconds = timeout_seconds
+    elif activity_timeout_seconds == 0.0:
+      activity_timeout_seconds = None
     default_activity_id: Optional[str] = args.default_activity_id
     activity_ids: List[str] = args.choice_activity_ids
     state_machine = AwsStepStateMachine.create_with_activity_choices(
         state_machine_id,
         activity_ids=activity_ids,
         default_activity_id=default_activity_id,
-        heartbeat_seconds=None if heartbeat_seconds is None else round(heartbeat_seconds),
-        timeout_seconds=None if timeout_seconds is None else round(timeout_seconds),
+        timeout_seconds=timeout_seconds,
+        activity_heartbeat_seconds=heartbeat_seconds,
+        activity_timeout_seconds=activity_timeout_seconds,
         session = self.get_aws_session()
       )
     self._state_machine = state_machine
@@ -280,8 +291,19 @@ class CommandLineInterface:
     args = self._args
     default_activity_id: Optional[str] = args.default_activity_id
     activity_ids: List[str] = args.choice_activity_ids
+    heartbeat_seconds: Optional[float] = args.heartbeat_seconds
+    if heartbeat_seconds == 0.0:
+      heartbeat_seconds = None
+    timeout_seconds: Optional[float] = args.timeout_seconds
+    if timeout_seconds == 0.0:
+      timeout_seconds = None
     state_machine = self.get_state_machine()
-    state_machine.set_activity_choices(activity_ids=activity_ids, default_activity_id=default_activity_id)
+    state_machine.set_activity_choices(
+        activity_ids=activity_ids,
+        default_activity_id=default_activity_id,
+        heartbeat_seconds=heartbeat_seconds,
+        timeout_seconds=timeout_seconds,
+      )
     state_machine.flush()
     return 0
 
@@ -289,8 +311,19 @@ class CommandLineInterface:
     args = self._args
     activity_id: str = args.choice_activity_id
     is_default: bool = args.is_default_activity_id
+    heartbeat_seconds: Optional[float] = args.heartbeat_seconds
+    if heartbeat_seconds == 0.0:
+      heartbeat_seconds = None
+    timeout_seconds: Optional[float] = args.timeout_seconds
+    if timeout_seconds == 0.0:
+      timeout_seconds = None
     state_machine = self.get_state_machine()
-    state_machine.add_activity_choice(activity_id, is_default=is_default)
+    state_machine.add_activity_choice(
+        activity_id,
+        is_default=is_default,
+        heartbeat_seconds=heartbeat_seconds,
+        timeout_seconds=timeout_seconds,
+      )
     state_machine.flush()
     return 0
 
@@ -300,6 +333,28 @@ class CommandLineInterface:
     state_machine = self.get_state_machine()
     state_machine.del_activity_choice(activity_id)
     state_machine.flush()
+    return 0
+
+  def cmd_start_execution(self) -> int:
+    args = self._args
+    input_str: Optional[str] = args.input_str
+    input_file: Optional[str] = args.input_file
+    execution_name: Optional[str] = args.execution_name
+    if input_str is None:
+      if input_file is None:
+        input_str = '{}'
+      else:
+        with open(input_file, 'r') as f:
+          input_str = f.read()
+    else:
+      if not input_file is None:
+        raise RuntimeError("--input-str and --input-file cannot both be provided")
+    if execution_name is None:
+      execution_name = str(uuid.uuid4())
+
+    state_machine = self.get_state_machine()
+    result = state_machine.start_execution(name=execution_name, input_data=input_str)
+    self.pretty_print(result)
     return 0
 
   def run(self) -> int:
@@ -373,10 +428,12 @@ class CommandLineInterface:
 
     parser_create_chooser = subparsers.add_parser('create-activity-chooser',
                             description='''Creates a simple AWS stepfunction state machine that chooses between a list of activities.''')
-    parser_create_chooser.add_argument('--heartbeat-seconds', type=float, default=None,
-                        help='The default interval for sending heartbeats, in seconds. By default, the AWS stepfunction default is used.')
-    parser_create_chooser.add_argument('--timeout-seconds', type=float, default=None,
-                        help='The default maximum execution runtime, in seconds. By default, No limit is imposed.')
+    parser_create_chooser.add_argument('--heartbeat-seconds', type=float, default=60.0,
+                        help='The required interval for receiving heartbeats, in seconds. If 0, heartbeats wil not be required. By default, 60 seconds is used.')
+    parser_create_chooser.add_argument('--timeout-seconds', type=float, default=600.0,
+                        help='The default maximum execution runtime to entire executions, in seconds. If 0, no limit will be imposed. By default, a 10-minute limit is imposed.')
+    parser_create_chooser.add_argument('--activity-timeout-seconds', type=float, default=600.0,
+                        help='The default maximum execution runtime for each activity, in seconds. If 0, no limit will be imposed. By default, the total execution limit is imposed.')
     parser_create_chooser.add_argument('--default-activity-id', default=None,
                         help='The default chosen activity if none is selected in a job. By default, an error will result if none is chosen.')
     parser_create_chooser.add_argument('-m', '--state-machine-id', default=None,
@@ -399,6 +456,10 @@ class CommandLineInterface:
                             description='''Update the activity choiices for a simple AWS stepfunction state machine that chooses between a list of activities.''')
     parser_update_chooser.add_argument('--default-activity-id', default=None,
                         help='The default chosen activity if none is selected in a job. By default, an error will result if none is chosen.')
+    parser_update_chooser.add_argument('--heartbeat-seconds', type=float, default=60.0,
+                        help='For newly created states, the required interval for receiving heartbeats, in seconds. If 0, heartbeats wil not be required. By default, 60 seconds is used.')
+    parser_update_chooser.add_argument('--timeout-seconds', type=float, default=600.0,
+                        help='For newly create states, the default maximum execution runtime, in seconds. If 0, no limit will be imposed. By default, a 10-minute limit is imposed.')
     parser_update_chooser.add_argument('choice_activity_ids', nargs=argparse.REMAINDER, default=[],
                         help='A list of activity names or ARNs that consitute named choices for the state machine.')
     parser_update_chooser.set_defaults(func=self.cmd_update_chooser)
@@ -411,6 +472,10 @@ class CommandLineInterface:
                             help='If provided, the activity will be the default activity. By default, the activity will not be used as the default activity.')
     parser_add_activity_choice.add_argument('-m', '--state-machine-id', default=None,
                         help='The AWS Step Function state machine name or state machine ARN. By default, environment variable AWS_STEP_STATE_MACHINE is used.')
+    parser_add_activity_choice.add_argument('--heartbeat-seconds', type=float, default=60.0,
+                        help='For newly created states, the required interval for receiving heartbeats, in seconds. If 0, heartbeats wil not be required. By default, 60 seconds is used.')
+    parser_add_activity_choice.add_argument('--timeout-seconds', type=float, default=600.0,
+                        help='For newly create states, the default maximum execution runtime, in seconds. If 0, no limit will be imposed. By default, a 10-minute limit is imposed.')
     parser_add_activity_choice.add_argument('choice_activity_id',
                         help='The activity name or ARN of the activity to be added as a choice. The activity will be created if it does not exist.')
     parser_add_activity_choice.set_defaults(func=self.cmd_add_activity_choice)
@@ -424,6 +489,20 @@ class CommandLineInterface:
     parser_del_activity_choice.add_argument('choice_activity_id',
                         help='The activity name or ARN of the activity to be deleted as a choice.')
     parser_del_activity_choice.set_defaults(func=self.cmd_del_activity_choice)
+
+    # ======================= start-execution
+
+    parser_start_execution = subparsers.add_parser('start-execution',
+                            description='''Starts a new execution of an AWS stepfunction state machine.''')
+    parser_start_execution.add_argument('-m', '--state-machine-id', default=None,
+                        help='The AWS Step Function state machine name or state machine ARN. By default, environment variable AWS_STEP_STATE_MACHINE is used.')
+    parser_start_execution.add_argument('-n', '--name', dest='execution_name', default=None,
+                        help='The name of the execution. By default, a new guid is used.')
+    parser_start_execution.add_argument('--input-str', default=None,
+                        help='The input data, as a string to pass to the new execution. By default, "{}" is used.')
+    parser_start_execution.add_argument('-i', '--input-file', default=None,
+                        help='The input data, as a filename, to pass to the new execution. By default, "{}" is used as data.')
+    parser_start_execution.set_defaults(func=self.cmd_start_execution)
 
     # ======================= run
 

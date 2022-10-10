@@ -114,6 +114,7 @@ class AwsStepStateMachine:
         start_at: str= 'Start',
         comment: Optional[str]=None,
         state_machine_type: str='STANDARD',
+        timeout_seconds: Optional[Union[int, float]]=None,
         tracingEnabled: bool=True,
         loggingLevel: Optional[str]=None,
         includeExecutionDataInLogs: Optional[bool]=None,
@@ -134,6 +135,8 @@ class AwsStepStateMachine:
         aws_profile: Optional[str]=None,
         aws_region: Optional[str]=None,
       ) -> 'AwsStepStateMachine':
+    if not timeout_seconds is None and timeout_seconds == 0.0:
+      timeout_seconds = None
     if loggingLevel is None:
       loggingLevel='ALL'
     if session is None:
@@ -145,6 +148,7 @@ class AwsStepStateMachine:
         start_at=start_at,
         comment=comment,
         state_machine_type=state_machine_type,
+        timeout_seconds=timeout_seconds,
         tracingEnabled=tracingEnabled,
         loggingLevel=loggingLevel,
         includeExecutionDataInLogs=includeExecutionDataInLogs,
@@ -189,12 +193,20 @@ class AwsStepStateMachine:
         role_add_xray_policy: bool=True,
         allow_role_exists: bool=True,
         allow_exists: bool=False,
-        heartbeat_seconds: Optional[int]=None,
-        timeout_seconds: Optional[int]=None,
+        timeout_seconds: Optional[Union[int, float]]=None,
+        activity_heartbeat_seconds: Optional[Union[int, float]]=None,
+        activity_timeout_seconds: Optional[Union[int, float]]=None,
         session: Optional[Session]=None,
         aws_profile: Optional[str]=None,
         aws_region: Optional[str]=None,
       ) -> 'AwsStepStateMachine':
+    if not timeout_seconds is None and timeout_seconds == 0.0:
+      timeout_seconds = None
+    if not activity_timeout_seconds is None and activity_timeout_seconds == 0.0:
+      activity_timeout_seconds = None
+    if not activity_heartbeat_seconds is None and activity_heartbeat_seconds == 0.0:
+      activity_heartbeat_seconds = None
+    
     variable = '$.activity'
     if session is None:
       session = Session(profile_name=aws_profile, region_name=aws_region)
@@ -227,10 +239,10 @@ class AwsStepStateMachine:
       )
     for activity_name, activity_arn in activity_map.items():
       state = dict(Type='Task', Next='Final', Resource=activity_arn)
-      if not heartbeat_seconds is None:
-        state['HeartbeatSeconds'] = heartbeat_seconds
-      if not timeout_seconds is None:
-        state['TimeoutSeconds'] = timeout_seconds
+      if not activity_heartbeat_seconds is None:
+        state['HeartbeatSeconds'] = round(activity_heartbeat_seconds)
+      if not activity_timeout_seconds is None:
+        state['TimeoutSeconds'] = round(activity_timeout_seconds)
       states[f'Run-{activity_name}'] = state
     result = cls.create(
           state_machine_id=state_machine_id,
@@ -239,6 +251,7 @@ class AwsStepStateMachine:
           start_at='Start',
           comment=comment,
           state_machine_type=state_machine_type,
+          timeout_seconds=timeout_seconds,
           tracingEnabled=tracingEnabled,
           loggingLevel=loggingLevel,
           includeExecutionDataInLogs=includeExecutionDataInLogs,
@@ -361,9 +374,9 @@ class AwsStepStateMachine:
         result_selector: Optional[JsonableDict]=None,
         retry: Optional[List[JsonableDict]]=None,
         catch: Optional[List[JsonableDict]]=None,
-        timeout_seconds: Optional[int]=None,
+        timeout_seconds: Optional[Union[int, float]]=None,
         timeout_seconds_path: Optional[str]=None,
-        heartbeat_seconds: Optional[int]=None,
+        heartbeat_seconds: Optional[Union[int, float]]=None,
         heartbeat_seconds_path: Optional[str]=None,
       ):
     state: JsonableDict = dict(Type='Task', Resource=resource_arn)
@@ -382,11 +395,11 @@ class AwsStepStateMachine:
     if not catch is None:
       state.update(Catch=catch)
     if not timeout_seconds is None:
-      state.update(TimeoutSeconds=timeout_seconds)
+      state.update(TimeoutSeconds=round(timeout_seconds))
     if not timeout_seconds_path is None:
       state.update(TimeoutSecondsPath=timeout_seconds_path)
     if not heartbeat_seconds is None:
-      state.update(HeartbeatSeconds=heartbeat_seconds)
+      state.update(HeartbeatSeconds=round(heartbeat_seconds))
     if not heartbeat_seconds_path is None:
       state.update(HeartbeatSecondsPath=heartbeat_seconds_path)
     self.set_state(state_name, state)
@@ -403,9 +416,9 @@ class AwsStepStateMachine:
         result_selector: Optional[JsonableDict]=None,
         retry: Optional[List[JsonableDict]]=None,
         catch: Optional[List[JsonableDict]]=None,
-        timeout_seconds: Optional[int]=None,
+        timeout_seconds: Optional[Union[int, float]]=600,
         timeout_seconds_path: Optional[str]=None,
-        heartbeat_seconds: Optional[int]=None,
+        heartbeat_seconds: Optional[Union[int, float]]=60,
         heartbeat_seconds_path: Optional[str]=None,
       ):
     if create_activity:
@@ -623,7 +636,11 @@ class AwsStepStateMachine:
         param_name: Optional[str]="activity",
         activity_ids: Optional[List[str]]=None,
         default_activity_id: Optional[str]=None,
-        activity_next_state: Optional[str]='::FinalOrNone::'
+        activity_next_state: Optional[str]='::FinalOrNone::',
+        timeout_seconds: Optional[Union[int, float]]=600,
+        timeout_seconds_path: Optional[str]=None,
+        heartbeat_seconds: Optional[Union[int, float]]=60,
+        heartbeat_seconds_path: Optional[str]=None,
       ):
     if activity_next_state == '::FinalOrNone::':
       activity_next_state = 'Final' if 'Final' in self.states else None
@@ -648,7 +665,15 @@ class AwsStepStateMachine:
     for choice_next_state in next_states.values():
       if not choice_next_state in self.states:
         activity_name = choice_next_state[4:]
-        self.set_activity_state(activity_name, choice_next_state, next_state=activity_next_state)
+        self.set_activity_state(
+            activity_name,
+            choice_next_state,
+            next_state=activity_next_state,
+            timeout_seconds=timeout_seconds,
+            timeout_seconds_path=timeout_seconds_path,
+            heartbeat_seconds=heartbeat_seconds,
+            heartbeat_seconds_path=heartbeat_seconds_path
+          )
     self.set_param_choice_next_states(state_name, param_name, next_states)
 
   def add_activity_choice(
@@ -657,7 +682,11 @@ class AwsStepStateMachine:
         state_name: str="SelectActivity",
         param_name: Optional[str]="activity",
         is_default: bool=False,
-        activity_next_state: Optional[str]='::FinalOrNone::'
+        activity_next_state: Optional[str]='::FinalOrNone::',
+        timeout_seconds: Optional[Union[int, float]]=600,
+        timeout_seconds_path: Optional[str]=None,
+        heartbeat_seconds: Optional[Union[int, float]]=60,
+        heartbeat_seconds_path: Optional[str]=None,
       ):
     activity_name_list, default_activity = self.get_activity_choices(state_name)
     activity_info = create_aws_step_activity(self.sfn, activity_id, allow_exists=True)
@@ -675,7 +704,11 @@ class AwsStepStateMachine:
         param_name=param_name,
         activity_ids=sorted(activity_names),
         default_activity_id=default_activity,
-        activity_next_state=activity_next_state
+        activity_next_state=activity_next_state,
+        timeout_seconds=timeout_seconds,
+        timeout_seconds_path=timeout_seconds_path,
+        heartbeat_seconds=heartbeat_seconds,
+        heartbeat_seconds_path=heartbeat_seconds_path
       )
 
   def del_activity_choice(
@@ -769,3 +802,28 @@ class AwsStepStateMachine:
 
   def is_param_default_choice(self, choice: JsonableDict):
     return 'Variable' in choice and choice['Variable'].startswith('$.') and 'IsPresent' in choice and not choice['IsPresent'] and 'Next' in choice
+  
+  def start_execution(
+        self,
+        name: Optional[str]=None,
+        input_data: Optional[Union[str, JsonableDict]]=None,
+        trace_header: Optional[str]=None,
+      ) -> JsonableDict:
+    if name is None:
+      name = str(uuid.uuid4())
+    input_data_str: str
+    if input_data is None:
+      input_data_str = '{}'
+    elif isinstance(input_data, str):
+      input_data_str = input_data
+    else:
+      input_data_str = json.dumps(input_data, sort_keys=True, separators=(',', ':'))
+    params = dict(stateMachineArn=self.state_machine_arn, name=name, input=input_data_str)
+    if trace_header != None:
+      params.update(traceHeader=trace_header)
+    resp = self.sfn.start_execution(**params)
+    result = normalize_jsonable_dict(resp)
+    result['name'] = name
+    result['state_machine_arn'] = self.state_machine_arn
+    result['state_machine_name'] = self.state_machine_name
+    return result

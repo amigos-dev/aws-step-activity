@@ -336,6 +336,7 @@ def create_aws_step_state_machine(
       start_at: str= 'Start',
       comment: Optional[str]=None,
       state_machine_type: str='STANDARD',
+      timeout_seconds: Optional[Union[int, float]]=None,
       tracingEnabled: bool=True,
       loggingLevel: Optional[str]=None,
       includeExecutionDataInLogs: Optional[bool]=None,
@@ -421,6 +422,8 @@ def create_aws_step_state_machine(
   if comment is None:
     comment = f'Stepfunction state machine {state_machine_name}'
   definition: JsonableDict = dict(Comment=comment, StartAt=start_at, States=states)
+  if not timeout_seconds is None and timeout_seconds != 0.0:
+    definition['TimeoutSeconds'] = round(timeout_seconds)
   loggingConfiguration: LoggingConfigurationTypeDef = dict()
   if not loggingLevel is None:
     loggingConfiguration['level'] = str(loggingLevel)
