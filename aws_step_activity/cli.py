@@ -6,6 +6,7 @@
 """Command-line interface for this package"""
 
 import base64
+from math import exp
 from typing import (
     TYPE_CHECKING, Optional, Sequence, List, Union, Dict, TextIO, Mapping, MutableMapping,
     cast, Any, Iterator, Iterable, Tuple, ItemsView, ValuesView, KeysView, Type )
@@ -36,6 +37,7 @@ from .internal_types import JsonableTypes, Jsonable, JsonableDict, JsonableList
 from .version import __version__ as pkg_version
 from .util import full_type, create_aws_session
 from .sfn_util import describe_aws_step_activity
+from .s3_util import S3Client, generate_presigned_s3_upload_post, upload_file_to_s3_with_signed_post
 from .state_machine import AwsStepStateMachine
 from boto3 import Session
 from mypy_boto3_stepfunctions.client import SFNClient, Exceptions as SFNExceptions
@@ -82,6 +84,7 @@ class CommandLineInterface:
 
   _aws_session: Optional[Session] = None
   _sfn: Optional[SFNClient] = None
+  _s3: Optional[S3Client] = None
   _activity_id: Optional[str] = None
   _state_machine_id: Optional[str] = None
   _state_machine: Optional[AwsStepStateMachine] = None
@@ -111,6 +114,11 @@ class CommandLineInterface:
     if self._sfn is None:
       self._sfn = self.get_aws_session().client('stepfunctions')
     return self._sfn
+
+  def get_s3(self) -> S3Client:
+    if self._s3 is None:
+      self._s3 = self.get_aws_session().client('s3')
+    return self._s3
 
   def get_activity_id(self) -> str:
     if self._activity_id is None:
@@ -357,6 +365,42 @@ class CommandLineInterface:
     self.pretty_print(result)
     return 0
 
+  def cmd_sign_s3_upload(self) -> int:
+    args = self._args
+    s3_url: str = args.s3_url
+    expire_seconds = round(args.expire_seconds)
+    result = generate_presigned_s3_upload_post(self.get_s3(), s3_url, expiration_seconds=expire_seconds)
+    #curl_cmd = 'curl'
+    #fields = result['fields']
+    #post_url = result['url']
+    #for k, v in sorted(fields.items()):
+    #  curl_cmd += f" -F {k}='{v}'"
+    #curl_cmd += f" -F file=@<local-file-path> '{post_url}'"
+    #logger.info(f"To upload file with curl, use: {curl_cmd}")
+
+    self.pretty_print(result)
+    return 0
+
+  def cmd_signed_upload(self) -> int:
+    """CLI command to upload a file to S3 using a presigned post
+
+    Example:
+        aws-step-activity sign-s3-upload s3://amigos-dev-backend/testing/cli.py | \
+            aws-step-activity signed-upload -p @/dev/stdin ./aws_step_activity/cli.py    
+
+    Returns:
+        int: CLI exit code. 0 on success.
+    """
+    args = self._args
+    signed_post_str: str = args.signed_post.strip()
+    filename: str = args.filename
+    if signed_post_str.startswith('@'):
+      with open(signed_post_str[1:], 'r') as fd:
+        signed_post_str = fd.read()
+    signed_post = json.loads(signed_post_str)
+    upload_file_to_s3_with_signed_post(signed_post, filename)
+    return 0
+
   def run(self) -> int:
     """Run the aws-step-activity commandline tool with provided arguments
 
@@ -504,6 +548,26 @@ class CommandLineInterface:
                         help='The input data, as a filename, to pass to the new execution. By default, "{}" is used as data.')
     parser_start_execution.set_defaults(func=self.cmd_start_execution)
 
+    # ======================= sign-s3-upload
+
+    parser_sign_s3_upload = subparsers.add_parser('sign-s3-upload',
+                            description='''Signs a POST request for upload to S3.''')
+    parser_sign_s3_upload.add_argument('--expire-seconds', type=float, default=600.0,
+                        help='The maximum number of seconds before the signed URL must be used. By default, 10 minutes is the limit.')
+    parser_sign_s3_upload.add_argument('s3_url',
+                        help='The s3:// url of the object to be uploaded.')
+    parser_sign_s3_upload.set_defaults(func=self.cmd_sign_s3_upload)
+
+    # ======================= signed-upload
+
+    parser_signed_upload = subparsers.add_parser('signed-upload',
+                            description='''Uploads a file to S3 using a presigned POST.''')
+    parser_signed_upload.add_argument('-p', '--signed-post',
+                        help='The presigned POST metadata (as produced by sign-s3-upload), as JSON, or "@" followed by a filename containing the JSON')
+    parser_signed_upload.add_argument('filename',
+                        help='The local filename containing the content to be uploaded.')
+    parser_signed_upload.set_defaults(func=self.cmd_signed_upload)
+
     # ======================= run
 
     parser_run = subparsers.add_parser('run',
@@ -531,12 +595,14 @@ class CommandLineInterface:
     except ArgparseExitError as ex:
       return ex.exit_code
     logging.basicConfig(level=args.loglevel.upper())
+    logLevel = logging.getLogger().level
     for modname in [
       'botocore.hooks','botocore.parsers','botocore.auth','botocore.endpoint','botocore.httpsession',
-      'botocore.loaders','botocore.credentials','botocore.retryhandler','botocore.utils','botocore.client',
+      'botocore.loaders','botocore.retryhandler','botocore.utils','botocore.client',
       'botocore.session','botocore.handlers','botocore.awsrequest','botocore.regions','urllib3.connectionpool',
       's3transfer.utils','s3transfer.tasks','s3transfer.futures']:
-      logging.getLogger(modname).setLevel(logging.INFO)
+      logging.getLogger(modname).setLevel(max(logLevel, logging.INFO))
+    logging.getLogger('botocore.credentials').setLevel(max(logLevel, logging.WARNING))
     traceback: bool = args.traceback
     try:
       self._args = args

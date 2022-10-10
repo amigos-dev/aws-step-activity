@@ -5,9 +5,11 @@
 
 """General utility functions for working with AWS S3"""
 
+from concurrent.futures.process import _ResultItem
+from dataclasses import field
 from .logging import logger
 
-from typing import Optional, Type, Any, Dict, Tuple, Generator, IO, List
+from typing import Optional, Type, Any, Dict, Tuple, Generator, IO, List, Union
 from .internal_types import Jsonable, JsonableDict
 
 import os
@@ -21,8 +23,11 @@ from mypy_boto3_s3.type_defs import ObjectTypeDef
 from botocore.exceptions import ClientError
 from urllib.parse import urlparse
 import urllib.parse
+import requests
+from io import StringIO
+from io import BytesIO
 
-from .util import create_aws_session
+from .util import create_aws_session, full_type, normalize_jsonable_dict
 
 def is_s3_url(url: str) -> bool:
   return url.startswith('s3:')
@@ -274,3 +279,191 @@ def s3_upload_folder(
     abs_file = os.path.join(input_folder, rel_file)
     object_url = url_prefix + rel_file
     s3_upload_file_to_object(object_url, abs_file, s3=s3)
+
+def generate_presigned_s3_upload_post(
+      s3: S3Client,
+      s3_object_url: str,
+      expiration_seconds: int=600,
+    ) -> JsonableDict:
+  """For a given S3 object URI, generates metadata for a temporary signed upload
+     HTTP POST request that will not require AWS credentials to succeed.
+
+     This can be used, e.g., by an API server to provide the client with the
+     ability to directly upload a file to S3 without having to stream the
+     contents of the file through the API server.
+
+     The result is of the form:
+        {
+          "fields": {
+            "AWSAccessKeyId": "<aws-access-key-id>",
+            "key": "<s3-object-key>",
+            "policy": "<base64-encoded-aws-policy>",
+            "signature": "<base64-encoded-signature>",
+            ...
+          },
+          "url": "https://<s3-bucket-name>.s3.amazonaws.com/"
+        }
+
+     An upload POST can be constructed using the result with curl as:
+
+       curl \
+         -F AWSAccessKeyId='<aws-access-key-id>' \
+         -F key='<s3-object-key> \
+         -F policy='<base64-encoded-aws-policy' \
+         -F signature='<base64-encoded-signature>' \
+         -F file=@<local-file-pathname> \
+         https://<s3-bucket-name>.s3.amazonaws.com/
+
+     An upload POST can be constructed in Python using the "requests"
+     module with:
+
+        import requests
+        import os
+
+        # local_filename: str = <path to local file to upload>
+        # signed_post: JsonableDict = <result of generate_presigned_s3_upload_post()>
+
+        with open(local_filename, 'rb') as fd:
+          r = requests.post(
+              signed_post['url'],
+              data=signed_post['fields'],
+              files={ "file": (os.path.basename(local_filename), fd) },
+            )
+        r.raise_for_status()
+
+     Functions upload_to_s3_with_signed_post(), upload_file_to_s3_with_signed_post()
+     and upload_data_to_s3_with_signed_post() are provided in this module to
+     properly invoke a signed upload POST.
+
+  Args:
+      s3 (S3Client):
+          The boto3 S3 client in the desired AWS session
+      s3_object_url (str):
+          The "s3://" URL for the object to be uploaded. The object may or may not exist.
+      expiration_seconds (int, optional):
+          The maximum number of seconds during which the metadata may be used to upload
+          to the specified S3 object. Defaults to 600 (ten minutes).
+
+  Returns:
+      JsonableDict:
+          A JSON-friendly dict that is used to construct an upload HTTP POST request.
+  """
+  bucket, key = parse_s3_url(s3_object_url)
+
+  resp = s3.generate_presigned_post(
+      Bucket=bucket,
+      Key=key,
+      ExpiresIn=expiration_seconds
+    )
+  result = normalize_jsonable_dict(resp)
+  return result
+
+def upload_to_s3_with_signed_post(
+      signed_post: JsonableDict,
+      fd: IO,
+      filename: Optional[str]=None,
+      fields: Optional[JsonableDict]=None,
+      headers: Optional[Dict[str, str]]=None,
+    ) -> None:
+  """Upload the contents of a file-like object to S3 using a presigned POST
+
+  Args:
+      signed_post (JsonableDict):
+          Presigned POST metadata as returned from generate_presigned_s3_upload_post()
+      fd (IO): A readable file-like object.
+          StringIO or BinaryIO are supported, but binary is recommended
+      filename (str, optional):
+          The logical name of the uploaded file as presented to S3. If None, uses the
+          basename of the S3 object key. Defaults to None.
+      fields (Optional[JsonableDict], optional):
+          Optional dictionary of additional fields to POST. Defaults to None.
+      headers (Optional[Dict[str, str]], optional):
+          Optional additional HTTP headers to POST. Defaults to None.
+  """
+  post_url: str = signed_post['url']
+  data: JsonableDict = {}
+  if not fields is None:
+    data.update(fields)
+  data.update(signed_post['fields'])
+  if filename is None:
+    filename = data['key']
+  files = dict(file=(os.path.basename(filename), fd))
+  r = requests.post(
+      post_url,
+      data=data,
+      files=files,
+      headers=headers)
+  r.raise_for_status()
+
+def upload_file_to_s3_with_signed_post(
+      signed_post: JsonableDict,
+      filename: str,
+      fields: Optional[JsonableDict]=None,
+      uploaded_filename: Optional[str]=None,
+      headers: Optional[Dict[str, str]]=None,
+    ) -> None:
+  """Upload the contents of a named file to S3 using a presigned POST
+
+  Args:
+      signed_post (JsonableDict):
+          Presigned POST metadata as returned from generate_presigned_s3_upload_post()
+      filename (str, optional):
+          The local pathname of a file to be uploaded to S3.
+      fields (Optional[JsonableDict], optional):
+          Optional dictionary of additional fields to POST. Defaults to None.
+      uploaded_filename (str, optional):
+          The logical name of the uploaded file as presented to S3. If None, uses the
+          basename of file being uploaded. Defaults to None.
+      headers (Optional[Dict[str, str]], optional):
+          Optional additional HTTP headers to POST. Defaults to None.
+  """
+  if uploaded_filename is None:
+    uploaded_filename = os.path.basename(filename)
+  with open(filename, 'rb') as fd:
+    upload_to_s3_with_signed_post(
+        signed_post,
+        fd,
+        filename=uploaded_filename,
+        fields=fields, 
+        headers=headers
+      )
+
+def upload_data_to_s3_with_signed_post(
+      signed_post: JsonableDict,
+      data: Union[str, bytes],
+      filename: Optional[str]=None,
+      fields: Optional[JsonableDict]=None,
+      headers: Optional[Dict[str, str]]=None,
+    ) -> None:
+  """Uploads an S3 object with content from a string or bytes value, using a presigned POST
+
+  Args:
+      signed_post (JsonableDict):
+          Presigned POST metadata as returned from generate_presigned_s3_upload_post()
+      data (Union[str, bytes]):
+          A string or bytes value containing the content to be used for upload
+      filename (str, optional):
+          The logical name of the uploaded file as presented to S3. If None, uses the
+          basename of the S3 object key. Defaults to None.
+      fields (Optional[JsonableDict], optional):
+          Optional dictionary of additional fields to POST. Defaults to None.
+      headers (Optional[Dict[str, str]], optional):
+          Optional additional HTTP headers to POST. Defaults to None.
+
+  Raises:
+      TypeError: The provided data is not a string or bytes value
+  """
+  if isinstance(data, bytes):
+    fd = BytesIO(data)
+  elif isinstance(data, str):
+    fd = StringIO(data)
+  else:
+    raise TypeError(f"data must be str or bytes: {full_type(data)}")
+  with fd:
+    upload_to_s3_with_signed_post(
+        signed_post,
+        fd,
+        filename=filename,
+        fields=fields,
+        headers=headers
+      )
