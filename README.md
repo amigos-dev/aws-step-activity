@@ -101,7 +101,7 @@ export ACTIVITY="$USER-test-activity"
 export STATE_MACHINE="$ACTIVITY-state-machine"
 aws-step-activity -m "$STATE_MACHINE" create-activity-chooser --default "$ACTIVITY" "$ACTIVITY"
 aws-step-activity -m "$STATE_MACHINE" describe-activity-chooser
-aws-step-activity --loglevel=debug -a "$ACTIVITY" run
+aws-step-activity --tb --loglevel=debug -a "$ACTIVITY" run
 # leave running, and open terminal 2
 ```
 
@@ -114,28 +114,30 @@ git clone https://github.com/migos-dev/aws-step-activity.git
 cd aws-step-activity
 poetry shell
 # following commands run in poetry subshell
+export AWS_PROFILE=default  # replace with the AWS profile you want to use
+export EXECUTION_S3_BUCKET="test-bucket-$(aws sts get-caller-identity | jq .Account)-$USER"
+
 mkdir -p test_data
 cd test_data
-export AWS_PROFILE=default  # replace with the AWS profile you want to use
 export ACTIVITY="$USER-test-activity"
 export STATE_MACHINE="$ACTIVITY-state-machine"
-export AWS_ACCOUNT="$(aws sts get-caller-identity | jq .Account)"
-export EXECUTION_S3_BUCKET="test-bucket-$AWS_ACCOUNT-$USER"
 export EXECUTION_S3_KEY_PREFIX="$USER-test-activity"
 aws s3 create-bucket --bucket "$EXECUTION_S3_BUCKET"
+export EXECUTION_S3_URL_PREFIX="s3://$EXECUTION_S3_BUCKET/$EXECUTION_S3_KEY_PREFIX"
 
 # The following should be repeated for each execution submitted
 export EXECUTION_NAME="$(aws-step-activity -r gen-execution-name)"
-export EXECUTION_S3_URL_PREFIX="s3://$EXECUTION_S3_BUCKET/$EXECUTION_S3_KEY_PREFIX"
 
 # create a script to run in the worker
 cat  >script.sh <<EOF
 #!/bin/bash
+set -e
 pwd
+find .
 echo "sleeping for 20 seconds"
 sleep 20
-cat ./input/test_input_file.txt
-echo "This is a test output file" > .output/test_output_file.txt
+cat ./input/input_data.txt
+echo "This is a test output file" > ./output/test_output_file.txt
 EOF
 
 rm -fr ./inputs
@@ -150,7 +152,7 @@ EOF
 aws-step-activity --tb -m "$STATE_MACHINE" -s "$EXECUTION_S3_URL_PREFIX" start-execution --name="$EXECUTION_NAME" -i inputs -v script@=script.sh
 
 # Wait for execution to finish
-aws-step-activity --tb -m "$STATE_MACHINE" wait-for-execution -"$EXECUTION_NAME"
+aws-step-activity --tb -m "$STATE_MACHINE" wait-for-execution "$EXECUTION_NAME"
 
 # Print stdout
 aws-step-activity -m -m "$STATE_MACHINE" cat-execution-output "$EXECUTION_NAME" stdout.txt
