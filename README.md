@@ -81,7 +81,7 @@ aand view the results in terminal 2. Note that terminal 1 and terminal 2 may
 be run on physically distinct machines.
 
 In these examples, an attempt is made to generate unique AWS resource names (S3 bucket, AWS step function state machine name),
-so as not to collide with others that ma run the same example in the same AWS account. Yu may freely
+so as not to collide with others that may run the same example in the same AWS account. You may freely
 modify the environment variables to reuse existing S3 bucket, etc.
 
 These examples make use of the _jq_ commandline utility as well as the AWS CLI.
@@ -112,6 +112,7 @@ mkdir -p aws-step-activity-test/client
 cd aws-step-activity-test/client
 git clone https://github.com/migos-dev/aws-step-activity.git
 cd aws-step-activity
+poetry install
 poetry shell
 # following commands run in poetry subshell
 export AWS_PROFILE=default  # replace with the AWS profile you want to use
