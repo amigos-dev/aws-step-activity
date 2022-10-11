@@ -181,7 +181,7 @@ To start a generic activity task worker that can run arbitrary shell scripts:
 ```bash
 
 cd <worker-data-parent-dir>
-aws-step-activity [-p <AWS-profile>] [-r <AWS-region>]  -a <AWS-stepfunction-activity-name> -w <unique-worker-name>
+aws-step-activity [-p <AWS-profile>] [-r <AWS-region>]  -a <AWS-stepfunction-activity-name> -w <unique-worker-name> run
 ```
 
 The task worker will keep running until it is stopped; e.g., with Ctrl-C.
@@ -195,12 +195,12 @@ TBD
 Known issues and limitations
 ----------------------------
 
-* Import/export are not yet supported.
+TBD
 
 Getting help
 ------------
 
-Please report any problems/issues [here](https://github.com/sammck/secret-kv/issues).
+Please report any problems/issues [here](https://github.com/amigos-dev/aws-step-activity/issues).
 
 Contributing
 ------------
@@ -210,9 +210,10 @@ Pull requests welcome.
 License
 -------
 
-secret-kv is distributed under the terms of the [MIT License](https://opensource.org/licenses/MIT).  The license applies to this file and other files in the [GitHub repository](http://github.com/sammck/secret-kv) hosting this file.
+aws-step-activity is distributed under the terms of the [MIT License](https://opensource.org/licenses/MIT).  The license applies to this file and other files in the [GitHub repository](http://github.com/amigos-dev/aws-step-activity) hosting this file.
 
 Authors and history
 ---------------------------
 
-The author of secret-kv is [Sam McKelvie](https://github.com/sammck).
+The initial author of aws-step-activity is [Sam McKelvie](https://github.com/sammck).
+It is maintained by [amigos.dev](https://amigos.dev).
