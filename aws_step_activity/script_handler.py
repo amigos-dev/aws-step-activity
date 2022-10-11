@@ -57,6 +57,7 @@ class AwsStepScriptHandler(AwsStepActivityTaskHandler):
               stdout=f_stdout,
               stderr=f_stderr,
               stdin=subprocess.PIPE,
+              cwd=self.task_working_dir,
               env=env
             ) as p:
           self.subproc = p

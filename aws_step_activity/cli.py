@@ -9,7 +9,7 @@ import base64
 from math import exp
 from typing import (
     TYPE_CHECKING, Optional, Sequence, List, Union, Dict, TextIO, Mapping, MutableMapping,
-    cast, Any, Iterator, Iterable, Tuple, ItemsView, ValuesView, KeysView, Type )
+    cast, Any, Iterator, Iterable, Tuple, ItemsView, ValuesView, KeysView, Type, IO )
 
 import logging
 import uuid
@@ -17,6 +17,7 @@ from .logging import logger
 
 import os
 import sys
+import datetime
 import argparse
 import argcomplete # type: ignore[import]
 import json
@@ -36,8 +37,13 @@ from .exceptions import AwsStepActivityError
 from .internal_types import JsonableTypes, Jsonable, JsonableDict, JsonableList
 from .version import __version__ as pkg_version
 from .util import full_type, create_aws_session
-from .sfn_util import describe_aws_step_activity
-from .s3_util import S3Client, generate_presigned_s3_upload_post, upload_file_to_s3_with_signed_post
+from .sfn_util import describe_aws_step_activity, get_aws_step_state_machine_name_from_arn
+from .s3_util import (
+    S3Client,
+    generate_presigned_s3_upload_post,
+    upload_file_to_s3_with_signed_post,
+    s3_upload_folder
+  )
 from .state_machine import AwsStepStateMachine
 from boto3 import Session
 from mypy_boto3_stepfunctions.client import SFNClient, Exceptions as SFNExceptions
@@ -88,6 +94,8 @@ class CommandLineInterface:
   _activity_id: Optional[str] = None
   _state_machine_id: Optional[str] = None
   _state_machine: Optional[AwsStepStateMachine] = None
+  _s3_base_url: Optional[str] = None
+  _have_s3_base_url: bool = False
 
   def __init__(self, argv: Optional[Sequence[str]]=None):
     self._argv = argv
@@ -141,6 +149,46 @@ class CommandLineInterface:
             raise RuntimeError(f'An AWS stepfunctions state machine name or ARN is required; either provide with --state-machine-id or set environment variable AWS_STEP_STATE_MACHINE_ID')
       self._state_machine_id = state_machine_id
     return self._state_machine_id
+
+  def get_state_machine_name(self) -> str:
+    state_machine_name = self.get_state_machine_id()
+    if ':' in state_machine_name:
+      state_machine_name = get_aws_step_state_machine_name_from_arn(state_machine_name)
+    return state_machine_name
+
+  def get_s3_base_url(self) -> Optional[str]:
+    if not self._have_s3_base_url:
+      s3_base_url: Optional[str] = getattr(self._args, 's3_base_url', None)
+      if s3_base_url is None:
+        s3_base_url = getattr(self._args, 'pre_s3_base_url', None)
+        if s3_base_url is None:
+          s3_base_url = os.environ.get('AWS_STEP_S3_BASE_URL', None)
+      self._s3_base_url = s3_base_url
+      self._have_s3_base_url = True
+
+    return self._s3_base_url
+
+  def get_state_machine_base_url(self) -> Optional[str]:
+    result = self.get_s3_base_url()
+    if not result is None:
+      if not result.endswith('/'):
+        result += '/'
+      result += self.get_state_machine_name()
+    return result
+
+  def get_execution_s3_base_url(self, execution_name: str) -> Optional[str]:
+    result = self.get_state_machine_base_url()
+    if not result is None:
+      if not result.endswith('/'):
+        result += '/'
+      result += execution_name
+    return result
+
+  def require_execution_s3_base_url(self, execution_name: str) -> str:
+    execution_url = self.get_execution_s3_base_url(execution_name)
+    if execution_url is None:
+      raise RuntimeError(f'--s3-base-url must be provided to determine URL of execution data')
+    return execution_url
 
   def get_state_machine(self) -> AwsStepStateMachine:
     if self._state_machine is None:
@@ -343,25 +391,73 @@ class CommandLineInterface:
     state_machine.flush()
     return 0
 
+  def gen_execution_name(self) -> str:
+    return AwsStepStateMachine.gen_execution_name()
+
+  def cmd_gen_execution_name(self) -> int:
+    result = self.gen_execution_name()
+    self.pretty_print(result)
+    return 0
+
   def cmd_start_execution(self) -> int:
     args = self._args
-    input_str: Optional[str] = args.input_str
-    input_file: Optional[str] = args.input_file
+    data_str: Optional[str] = args.data
     execution_name: Optional[str] = args.execution_name
-    if input_str is None:
-      if input_file is None:
-        input_str = '{}'
-      else:
-        with open(input_file, 'r') as f:
-          input_str = f.read()
-    else:
-      if not input_file is None:
-        raise RuntimeError("--input-str and --input-file cannot both be provided")
     if execution_name is None:
-      execution_name = str(uuid.uuid4())
+      execution_name = self.gen_execution_name()
+    data: JsonableDict
+    if data_str is None:
+      data = {}
+    else:
+      if data_str.startswith('@'):
+        with open(data_str[1:], 'r') as fd:
+          data_str = fd.read()
+      data = json.loads(data_str)
+    param_assignments: List[str] = args.param_value
+    for param_assignment in param_assignments:
+      if not '=' in param_assignment:
+        raise ValueError(f'Parameter assignment requires "=": "{param_assignment}"')
+      param_dest, param_str = param_assignment.split('=', 1)
+      param_is_file = param_dest.endswith('@')
+      if param_is_file:
+        param_dest = param_dest[:-1]
+        with open(param_str, 'r') as fd:
+          param_str = fd.read()
+      if ':' in param_dest:
+        param_dest, param_type = param_dest.split(':', 1)
+        param_type = param_type.lower()
+      else:
+        param_type = 'str'
+      param_value: Jsonable
+      if param_type == 'str':
+        param_value = param_str
+      elif param_type == 'json':
+        param_value = json.loads(param_str)
+      else:
+        raise ValueError(f'Parameter assignment type must be "str" or "json": "{param_assignment}"')
+      data[param_dest] = param_value
+
+    if not 'execution_name' in data:
+      data['execution_name'] = execution_name
 
     state_machine = self.get_state_machine()
-    result = state_machine.start_execution(name=execution_name, input_data=input_str)
+
+    input_dir: Optional[str] = args.input_dir
+    if not input_dir is None:
+      inputs_url: str
+      if 's3_inputs' in data:
+        inputs_url = data['s3_inputs']
+      else:
+        execution_url = self.require_execution_s3_base_url(execution_name)
+        inputs_url = execution_url + '/inputs'
+        data['s3_inputs'] = inputs_url
+      s3_upload_folder(inputs_url, input_dir, s3=self.get_s3(), session=self.get_aws_session())
+    if not 's3_outputs' in data:
+        optional_execution_url = self.get_execution_s3_base_url(execution_name)
+        if not optional_execution_url is None:
+          outputs_url = execution_url + '/outputs'
+          data['s3_outputs'] = outputs_url
+    result = state_machine.start_execution(name=execution_name, input_data=data)
     self.pretty_print(result)
     return 0
 
@@ -383,6 +479,53 @@ class CommandLineInterface:
     result = state_machine.describe_execution(execution_name)
     self.pretty_print(result)
     return 0
+
+  def cmd_wait_for_execution(self) -> int:
+    args = self._args
+    polling_interval_seconds: int = args.polling_interval_seconds
+    execution_name: str = args.execution_name
+
+    state_machine = self.get_state_machine()
+    result = state_machine.wait_for_execution(execution_name, polling_interval_seconds=polling_interval_seconds, max_wait_seconds=None)
+    self.pretty_print(result)
+    return 0
+
+  def download_execution_output_file_to_fileobj(
+        self,
+        execution_id: str,
+        execution_output_filename: str,
+        f: IO,
+      ) -> None:
+    state_machine = self.get_state_machine()
+    state_machine.download_execution_output_file_to_fileobj(
+        execution_id,
+        execution_output_filename,
+        f
+      )
+
+  def download_execution_output_file_to_stdout(
+        self,
+        execution_id: str,
+        execution_output_filename: str,
+      ) -> None:
+    with os.fdopen(sys.stdout.fileno(), "wb", closefd=False) as f:
+      self.download_execution_output_file_to_fileobj(execution_id, execution_output_filename, f)
+
+  def download_execution_output_file_to_stderr(
+        self,
+        execution_id: str,
+        execution_output_filename: str,
+      ) -> None:
+    with os.fdopen(sys.stderr.fileno(), "wb", closefd=False) as f:
+      self.download_execution_output_file_to_fileobj(execution_id, execution_output_filename, f)
+
+  def cmd_cat_execution_output(self) -> int:
+    args = self._args
+    execution_name: str = args.execution_name
+    execution_output_filename: str = args.execution_output_file
+    self.download_execution_output_file_to_stdout(execution_name, execution_output_filename)
+    return 0
+
 
   def cmd_sign_s3_upload(self) -> int:
     args = self._args
@@ -462,6 +605,8 @@ class CommandLineInterface:
                         help='The AWS Step Function state machine name or state machine ARN. By default, environment variable AWS_STEP_STATE_MACHINE is used.')
     parser.add_argument('-a', '--activity-id', default=None,
                         help='The AWS Step Function Activity name or Activity ARN. By default, environment variable AWS_STEP_ACTIVITY_ID is used.')
+    parser.add_argument('-s', '--s3-base-url', dest='pre_s3_base_url', default=None,
+                        help='The "s3://" URL that is the parent folder for all execution inputs/outputs. By default, environment variable AWS_STEP_S3_BASE_URL is used.')
     parser.set_defaults(func=self.cmd_bare)
 
     subparsers = parser.add_subparsers(
@@ -553,6 +698,12 @@ class CommandLineInterface:
                         help='The activity name or ARN of the activity to be deleted as a choice.')
     parser_del_activity_choice.set_defaults(func=self.cmd_del_activity_choice)
 
+    # ======================= gen-execution-name
+
+    parser_gen_execution_name = subparsers.add_parser('gen-execution-name',
+                            description='''Generates a new unique execution name.''')
+    parser_gen_execution_name.set_defaults(func=self.cmd_gen_execution_name)
+
     # ======================= start-execution
 
     parser_start_execution = subparsers.add_parser('start-execution',
@@ -561,10 +712,19 @@ class CommandLineInterface:
                         help='The AWS Step Function state machine name or state machine ARN. By default, environment variable AWS_STEP_STATE_MACHINE is used.')
     parser_start_execution.add_argument('-n', '--name', dest='execution_name', default=None,
                         help='The name of the execution. By default, a new guid is used.')
-    parser_start_execution.add_argument('--input-str', default=None,
-                        help='The input data, as a string to pass to the new execution. By default, "{}" is used.')
-    parser_start_execution.add_argument('-i', '--input-file', default=None,
-                        help='The input data, as a filename, to pass to the new execution. By default, "{}" is used as data.')
+    parser_start_execution.add_argument('-d', '--data', default=None,
+                        help='The base input data, JSON dict string, to pass to the new execution. If "@<filename>" is '
+                             'provided, the data is read from the specified file. This data can be further modified with'
+                             '-s, -p, -i, and -o options. By default, "{}" is used as data.')
+    parser_start_execution.add_argument('-v', '--param-value', default=[], action='append',
+                        help='A string in the form "<param-name>[:<param-type>][@]=<param-value>". The named parameter is '
+                             'added to the base input data. This option may be repeated. <param-type> may be json or str; by default str '
+                             'is assumed. If "@" is appended to the param name, then <param-value> is interpreted as a file from which '
+                             'the actual value is read. By default, no parameters are added to the base input data.')
+    parser_start_execution.add_argument('-s', '--s3-base-url', default=None,
+                        help='The "s3://" URL that is the parent folder for all execution inputs/outputs. By default, environment variable AWS_STEP_S3_BASE_URL is used.')
+    parser_start_execution.add_argument('-i', '--input-dir', default=None,
+                        help='The local inputs data folder that should be uploaded to S3 before execution. By default, no folder is uploaded.')
     parser_start_execution.set_defaults(func=self.cmd_start_execution)
 
     # ======================= describe-execution
@@ -576,6 +736,30 @@ class CommandLineInterface:
     parser_describe_execution.add_argument('execution_name',
                         help='The name of the execution.')
     parser_describe_execution.set_defaults(func=self.cmd_describe_execution)
+
+    # ======================= wait-for-execution
+
+    parser_wait_for_execution = subparsers.add_parser('wait-for-execution',
+                            description='''Waits for an execution to complete.''')
+    parser_wait_for_execution.add_argument('-m', '--state-machine-id', default=None,
+                        help='The AWS Step Function state machine name or state machine ARN. By default, environment variable AWS_STEP_STATE_MACHINE is used.')
+    parser_wait_for_execution.add_argument('-p', '--polling-interval-seconds', type=int, default=10,
+                        help='The interval at which to poll AWS for results, in seconds. By default, the execution is polled every 10 seconds')
+    parser_wait_for_execution.add_argument('execution_name',
+                        help='The name of the execution.')
+    parser_wait_for_execution.set_defaults(func=self.cmd_wait_for_execution)
+
+    # ======================= cat-execution-output
+
+    parser_cat_execution_output = subparsers.add_parser('cat-execution-output',
+                            description='''Copies the contents of an exetion outputfile to stdout.''')
+    parser_cat_execution_output.add_argument('-m', '--state-machine-id', default=None,
+                        help='The AWS Step Function state machine name or state machine ARN. By default, environment variable AWS_STEP_STATE_MACHINE is used.')
+    parser_cat_execution_output.add_argument('execution_name',
+                        help='The name of the execution.')
+    parser_cat_execution_output.add_argument('execution_output_file',
+                        help='The name of the execution output file, relative to the execution\'s S3 output folder.')
+    parser_cat_execution_output.set_defaults(func=self.cmd_cat_execution_output)
 
     # ======================= list-executions
 

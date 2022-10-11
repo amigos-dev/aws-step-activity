@@ -9,8 +9,8 @@
 from .logging import logger
 
 import sys
-from time import sleep
-from typing import TYPE_CHECKING, Optional, Dict, Type, Union, List, Tuple, Set, Any, Generator
+from time import monotonic_ns, sleep
+from typing import TYPE_CHECKING, Optional, Dict, Type, Union, List, Tuple, Set, Any, Generator, IO
 from types import TracebackType
 
 from mypy_boto3_stepfunctions.client import SFNClient, Exceptions as SFNExceptions
@@ -42,6 +42,7 @@ from .sfn_util import (
     get_aws_step_state_machine_and_execution_names_from_arn,
   )
 
+from .s3_util import S3Client, s3_download_object_to_fileobj
 
 import threading
 from threading import Thread, Lock, Condition
@@ -64,6 +65,7 @@ class AwsStepStateMachine:
   cv: Condition
   session: Session
   sfn: SFNClient
+  s3: S3Client
   state_machine_desc: JsonableDict
   state_machine_name: str
   state_machine_arn: str
@@ -104,6 +106,8 @@ class AwsStepStateMachine:
 
     sfn = self.session.client('stepfunctions')
     self.sfn = sfn
+    s3 = self.session.client('s3')
+    self.s3 = s3
 
     desc = describe_aws_step_state_machine(sfn, state_machine_id)
     self._refresh_from_desc(desc)
@@ -804,7 +808,12 @@ class AwsStepStateMachine:
 
   def is_param_default_choice(self, choice: JsonableDict):
     return 'Variable' in choice and choice['Variable'].startswith('$.') and 'IsPresent' in choice and not choice['IsPresent'] and 'Next' in choice
-  
+
+  @classmethod  
+  def gen_execution_name(cls) -> str:
+    result = datetime.utcnow().isoformat()[:19].replace(':', '-') +'Z-' + str(uuid.uuid4())
+    return result
+
   def start_execution(
         self,
         name: Optional[str]=None,
@@ -812,11 +821,13 @@ class AwsStepStateMachine:
         trace_header: Optional[str]=None,
       ) -> JsonableDict:
     if name is None:
-      name = str(uuid.uuid4())
+      name = self.gen_execution_name()
     input_data_str: str
     if input_data is None:
+      input_data = {}
       input_data_str = '{}'
     elif isinstance(input_data, str):
+      input_data = json.loads(input_data)
       input_data_str = input_data
     else:
       input_data_str = json.dumps(input_data, sort_keys=True, separators=(',', ':'))
@@ -828,6 +839,10 @@ class AwsStepStateMachine:
     result['name'] = name
     result['state_machine_arn'] = self.state_machine_arn
     result['state_machine_name'] = self.state_machine_name
+    result['input'] = input_data
+    if not trace_header is None:
+      result['trace_header'] = trace_header
+
     return result
 
   def describe_execution(
@@ -844,6 +859,49 @@ class AwsStepStateMachine:
     result['state_machine_name'] = state_machine_name
     result['execution_name'] = execution_name
     return result
+
+  def wait_for_execution(
+        self,
+        execution_id: str,
+        polling_interval_seconds: Union[float, int]=10,
+        max_wait_seconds: Optional[Union[float, int]]=None
+      ) -> JsonableDict:
+    start_time_ns = monotonic_ns()
+    polling_interval_ns = round(polling_interval_seconds * 1000000000.0)
+    max_wait_ns: Optional[int] = None if max_wait_seconds is None else round(max_wait_seconds * 1000000000.0)
+    while True:
+      result = self.describe_execution(execution_id)
+      if result['status'] != 'RUNNING':
+        return result
+      sleep_ns = polling_interval_ns
+      if not max_wait_ns is None:
+        elapsed_ns = monotonic_ns() - start_time_ns
+        remaining_ns = max_wait_ns - elapsed_ns
+        if remaining_ns <= 0:
+          raise TimeoutError("Timed out waiting for execution to complete")
+        sleep_ns = min(sleep_ns, remaining_ns)
+      sleep(sleep_ns/1000000000.0)
+
+  def download_execution_output_file_to_fileobj(
+        self,
+        execution_id: str,
+        output_filename: str,
+        f: IO,
+      ):
+    exec_result = self.describe_execution(execution_id)
+    input_data_str: Optional[str] = exec_result.get('input', None)
+    if input_data_str is None:
+      raise RuntimeError(f'Execution metadata does not include input data: {execution_id}')
+    input_data: JsonableDict = json.loads(input_data_str)
+    s3_outputs: Optional[str] = input_data.get('s3_outputs', None)
+    if s3_outputs is None:
+      raise RuntimeError(f'Execution does not provide s3_outputs: {execution_id}')
+    while output_filename.startswith('/'):
+      output_filename = output_filename[1:]
+    while s3_outputs.endswith('/'):
+      s3_outputs = s3_outputs[:-1]
+    s3_url = s3_outputs + '/' + output_filename
+    s3_download_object_to_fileobj(s3_url, f, s3=self.s3, session=self.session)
 
   def list_some_executions(
         self,
