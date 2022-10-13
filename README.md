@@ -156,13 +156,13 @@ aws-step-activity --tb -m "$STATE_MACHINE" -s "$EXECUTION_S3_URL_PREFIX" start-e
 aws-step-activity --tb -m "$STATE_MACHINE" wait-for-execution "$EXECUTION_NAME"
 
 # Print stdout
-aws-step-activity -m -m "$STATE_MACHINE" cat-execution-output "$EXECUTION_NAME" stdout.txt
+aws-step-activity -m "$STATE_MACHINE" cat-execution-output "$EXECUTION_NAME" stdout.txt
 
 # Print stderr
-aws-step-activity -m -m "$STATE_MACHINE" cat-execution-output "$EXECUTION_NAME" stderr.txt >&2
+aws-step-activity -m "$STATE_MACHINE" cat-execution-output "$EXECUTION_NAME" stderr.txt >&2
 
 # Print the generated output file
-aws-step-activity -m -m "$STATE_MACHINE" cat-execution-output "$EXECUTION_NAME" test_output_file.txt
+aws-step-activity -m "$STATE_MACHINE" cat-execution-output "$EXECUTION_NAME" test_output_file.txt
 ```
 
 
