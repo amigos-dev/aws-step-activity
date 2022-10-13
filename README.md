@@ -116,14 +116,14 @@ poetry install
 poetry shell
 # following commands run in poetry subshell
 export AWS_PROFILE=default  # replace with the AWS profile you want to use
-export EXECUTION_S3_BUCKET="test-bucket-$(aws sts get-caller-identity | jq .Account)-$USER"
+export EXECUTION_S3_BUCKET="test-bucket-$(aws sts get-caller-identity | jq -r .Account)-$USER"
 
 mkdir -p test_data
 cd test_data
 export ACTIVITY="$USER-test-activity"
 export STATE_MACHINE="$ACTIVITY-state-machine"
 export EXECUTION_S3_KEY_PREFIX="$USER-test-activity"
-aws s3 create-bucket --bucket "$EXECUTION_S3_BUCKET"
+aws s3api create-bucket --bucket "$EXECUTION_S3_BUCKET" --create-bucket-configuration LocationConstraint="$(aws configure get region)"
 export EXECUTION_S3_URL_PREFIX="s3://$EXECUTION_S3_BUCKET/$EXECUTION_S3_KEY_PREFIX"
 
 # The following should be repeated for each execution submitted
