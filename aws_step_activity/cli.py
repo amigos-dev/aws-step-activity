@@ -19,7 +19,7 @@ import os
 import sys
 import datetime
 import argparse
-import argcomplete # type: ignore[import]
+#import argcomplete # type: ignore[import]
 import json
 from base64 import b64encode, b64decode
 import colorama # type: ignore[import]
@@ -817,7 +817,7 @@ class CommandLineInterface:
 
     # =========================================================
 
-    argcomplete.autocomplete(parser)
+    #argcomplete.autocomplete(parser)
     try:
       args = parser.parse_args(self._argv)
     except ArgparseExitError as ex:
