@@ -7,16 +7,14 @@
 
 from .logging import logger
 
-from typing import Optional, Type, Any, Dict
-from .internal_types import Jsonable, JsonableDict, JsonableList
+from typing import TYPE_CHECKING, Optional, Type, Any, Dict
+from .internal_types import Jsonable, JsonableDict, JsonableList, STSClient
 from collections.abc import Mapping, Iterable
 
 import boto3
 import botocore
 import botocore.session
 from boto3 import Session
-from mypy_boto3_stepfunctions.client import SFNClient, Exceptions as SFNExceptions
-from mypy_boto3_sts.client import STSClient, Exceptions as STSExceptions
 
 def create_aws_session(
       session: Optional[Session]=None,

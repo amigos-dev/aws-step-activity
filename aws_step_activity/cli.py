@@ -34,7 +34,7 @@ from io import StringIO
 from aws_step_activity.worker import AwsStepActivityWorker
 
 from .exceptions import AwsStepActivityError
-from .internal_types import JsonableTypes, Jsonable, JsonableDict, JsonableList
+from .internal_types import JsonableTypes, Jsonable, JsonableDict, JsonableList, SFNClient
 from .version import __version__ as pkg_version
 from .util import full_type, create_aws_session
 from .sfn_util import describe_aws_step_activity, get_aws_step_state_machine_name_from_arn
@@ -46,7 +46,6 @@ from .s3_util import (
   )
 from .state_machine import AwsStepStateMachine
 from boto3 import Session
-from mypy_boto3_stepfunctions.client import SFNClient, Exceptions as SFNExceptions
 
 def is_colorizable(stream: TextIO) -> bool:
   is_a_tty = hasattr(stream, 'isatty') and stream.isatty()

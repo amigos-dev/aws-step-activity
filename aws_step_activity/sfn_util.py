@@ -8,8 +8,16 @@
 import uuid
 from .logging import logger
 
-from typing import Optional, Type, Any, Dict, Tuple, Generator, IO, List, Union
-from .internal_types import Jsonable, JsonableDict
+from typing import TYPE_CHECKING, Optional, Type, Any, Dict, Tuple, Generator, IO, List, Union
+from .internal_types import (
+    Jsonable,
+    JsonableDict,
+    SFNClient,
+    IAMClient,
+    CloudWatchLogsClient,
+    SFN_LoggingConfigurationTypeDef as LoggingConfigurationTypeDef,
+    SFN_TracingConfigurationTypeDef as TracingConfigurationTypeDef,
+  )
 
 import os
 import sys
@@ -20,14 +28,6 @@ import botocore
 import botocore.session
 import time
 from boto3 import Session
-from botocore.exceptions import ClientError
-from mypy_boto3_s3.client import S3Client, Exceptions as S3Exceptions
-from mypy_boto3_s3.type_defs import ObjectTypeDef
-from mypy_boto3_stepfunctions.client import SFNClient, Exceptions as SFNExceptions
-from mypy_boto3_stepfunctions.type_defs import LoggingConfigurationTypeDef, TracingConfigurationTypeDef
-from mypy_boto3_iam.client import IAMClient, Exceptions as IAMExceptions
-from mypy_boto3_logs.client import CloudWatchLogsClient, Exceptions as CloudWatchLogsExceptions
-
 from botocore.exceptions import ClientError
 
 from urllib.parse import urlparse

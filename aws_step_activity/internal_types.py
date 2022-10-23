@@ -34,6 +34,32 @@ from typing import (
     Sequence,
   )
 
+from botocore.exceptions import ClientError
+from botocore.client import BaseClient
+
+# Only use mypy during type-checking (these libraries are not included in
+# non-development install)
+if TYPE_CHECKING:
+  from mypy_boto3_stepfunctions.client import SFNClient
+  from mypy_boto3_s3.client import S3Client
+  from mypy_boto3_logs.client import CloudWatchLogsClient
+  from mypy_boto3_iam.client import IAMClient
+  from mypy_boto3_sts.client import STSClient
+  from mypy_boto3_s3.type_defs import ObjectTypeDef as S3_ObjectTypeDef
+  from mypy_boto3_stepfunctions.type_defs import (
+      LoggingConfigurationTypeDef as SFN_LoggingConfigurationTypeDef,
+      TracingConfigurationTypeDef as SFN_TracingConfigurationTypeDef
+    )
+else:
+  SFNClient = BaseClient
+  S3Client = BaseClient
+  CloudWatchLogsClient = BaseClient
+  IAMClient = BaseClient
+  STSClient = BaseClient
+  S3_ObjectTypeDef = Dict[str, Any]
+  SFN_LoggingConfigurationTypeDef = Dict[str, Any]
+  SFN_TracingConfigurationTypeDef = Dict[str, Any]
+
 JsonableTypes = ( str, int, float, bool, dict, list )
 # A tuple of types to use for isinstance checking of JSON-serializable types. Excludes None. Useful for isinstance.
 

@@ -13,9 +13,13 @@ from time import monotonic_ns, sleep
 from typing import TYPE_CHECKING, Optional, Dict, Type, Union, List, Tuple, Set, Any, Generator, IO
 from types import TracebackType
 
-from mypy_boto3_stepfunctions.client import SFNClient, Exceptions as SFNExceptions
-from mypy_boto3_stepfunctions.type_defs import LoggingConfigurationTypeDef, TracingConfigurationTypeDef
-from .internal_types import Jsonable, JsonableDict
+from .internal_types import (
+    Jsonable,
+    JsonableDict,
+    SFNClient,
+    SFN_LoggingConfigurationTypeDef as LoggingConfigurationTypeDef,
+    SFN_TracingConfigurationTypeDef as TraingConfigurationTypeDef,
+  )
 
 
 import boto3

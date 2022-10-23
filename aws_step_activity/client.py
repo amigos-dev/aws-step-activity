@@ -13,10 +13,7 @@ from time import sleep
 from typing import TYPE_CHECKING, Optional, Dict, Type, Union
 from types import TracebackType
 
-from mypy_boto3_stepfunctions.client import SFNClient, Exceptions as SFNExceptions
-
 from .internal_types import Jsonable, JsonableDict
-
 
 import boto3
 from boto3 import Session

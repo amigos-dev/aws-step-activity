@@ -10,13 +10,9 @@ from .logging import logger
 import sys
 import os
 from time import sleep
-from typing import Optional, Dict, Type, Any
+from typing import Optional, Dict, Type, Any, TYPE_CHECKING
 from types import TracebackType
-
-from mypy_boto3_stepfunctions.client import SFNClient, Exceptions as SFNExceptions
-from mypy_boto3_s3.client import S3Client, Exceptions as S3Exceptions
-
-from .internal_types import Jsonable, JsonableDict
+from .internal_types import Jsonable, JsonableDict, SFNClient, S3Client
 
 import boto3
 from boto3 import Session

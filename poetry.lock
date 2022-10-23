@@ -50,7 +50,7 @@ crt = ["botocore[crt] (>=1.21.0,<2.0a0)"]
 name = "boto3-stubs"
 version = "1.24.96"
 description = "Type annotations for boto3 1.24.96 generated with mypy-boto3-builder 7.11.10"
-category = "main"
+category = "dev"
 optional = false
 python-versions = ">=3.7"
 
@@ -409,7 +409,7 @@ crt = ["awscrt (==0.14.0)"]
 name = "botocore-stubs"
 version = "1.27.96"
 description = "Type annotations and code completion for botocore"
-category = "main"
+category = "dev"
 optional = false
 python-versions = ">=3.7,<4.0"
 
@@ -420,7 +420,7 @@ types-awscrt = "*"
 name = "certifi"
 version = "2022.9.24"
 description = "Python package for providing Mozilla's CA Bundle."
-category = "dev"
+category = "main"
 optional = false
 python-versions = ">=3.6"
 
@@ -439,7 +439,7 @@ pycparser = "*"
 name = "charset-normalizer"
 version = "2.1.1"
 description = "The Real First Universal Charset Detector. Open, modern and actively maintained alternative to Chardet."
-category = "dev"
+category = "main"
 optional = false
 python-versions = ">=3.6.0"
 
@@ -559,7 +559,7 @@ gitdb = ">=4.0.1,<5"
 name = "idna"
 version = "3.4"
 description = "Internationalized Domain Names in Applications (IDNA)"
-category = "dev"
+category = "main"
 optional = false
 python-versions = ">=3.5"
 
@@ -700,7 +700,7 @@ python2 = ["typed-ast (>=1.4.0,<2)"]
 name = "mypy-boto3-cloudformation"
 version = "1.24.36.post1"
 description = "Type annotations for boto3.CloudFormation 1.24.36 service generated with mypy-boto3-builder 7.10.0"
-category = "main"
+category = "dev"
 optional = false
 python-versions = ">=3.7"
 
@@ -711,7 +711,7 @@ typing-extensions = ">=4.1.0"
 name = "mypy-boto3-dynamodb"
 version = "1.24.74"
 description = "Type annotations for boto3.DynamoDB 1.24.74 service generated with mypy-boto3-builder 7.11.8"
-category = "main"
+category = "dev"
 optional = false
 python-versions = ">=3.7"
 
@@ -722,7 +722,7 @@ typing-extensions = ">=4.1.0"
 name = "mypy-boto3-ec2"
 version = "1.24.86"
 description = "Type annotations for boto3.EC2 1.24.86 service generated with mypy-boto3-builder 7.11.10"
-category = "main"
+category = "dev"
 optional = false
 python-versions = ">=3.7"
 
@@ -744,7 +744,7 @@ typing-extensions = ">=4.1.0"
 name = "mypy-boto3-lambda"
 version = "1.24.54"
 description = "Type annotations for boto3.Lambda 1.24.54 service generated with mypy-boto3-builder 7.11.6"
-category = "main"
+category = "dev"
 optional = false
 python-versions = ">=3.7"
 
@@ -766,7 +766,7 @@ typing-extensions = ">=4.1.0"
 name = "mypy-boto3-rds"
 version = "1.24.76"
 description = "Type annotations for boto3.RDS 1.24.76 service generated with mypy-boto3-builder 7.11.8"
-category = "main"
+category = "dev"
 optional = false
 python-versions = ">=3.7"
 
@@ -777,7 +777,7 @@ typing-extensions = ">=4.1.0"
 name = "mypy-boto3-s3"
 version = "1.24.94"
 description = "Type annotations for boto3.S3 1.24.94 service generated with mypy-boto3-builder 7.11.10"
-category = "main"
+category = "dev"
 optional = false
 python-versions = ">=3.7"
 
@@ -788,7 +788,7 @@ typing-extensions = ">=4.1.0"
 name = "mypy-boto3-sqs"
 version = "1.24.60"
 description = "Type annotations for boto3.SQS 1.24.60 service generated with mypy-boto3-builder 7.11.8"
-category = "main"
+category = "dev"
 optional = false
 python-versions = ">=3.7"
 
@@ -799,7 +799,7 @@ typing-extensions = ">=4.1.0"
 name = "mypy-boto3-stepfunctions"
 version = "1.24.36.post1"
 description = "Type annotations for boto3.SFN 1.24.36 service generated with mypy-boto3-builder 7.10.0"
-category = "main"
+category = "dev"
 optional = false
 python-versions = ">=3.7"
 
@@ -1003,7 +1003,7 @@ md = ["cmarkgfm (>=0.8.0)"]
 name = "requests"
 version = "2.28.1"
 description = "Python HTTP for Humans."
-category = "dev"
+category = "main"
 optional = false
 python-versions = ">=3.7, <4"
 
@@ -1169,7 +1169,7 @@ urllib3 = ">=1.26.0"
 name = "types-awscrt"
 version = "0.14.7"
 description = "Type annotations and code completion for awscrt"
-category = "main"
+category = "dev"
 optional = false
 python-versions = ">=3.7,<4.0"
 
@@ -1185,7 +1185,7 @@ python-versions = "*"
 name = "types-s3transfer"
 version = "0.6.0.post4"
 description = "Type annotations and code completion for s3transfer"
-category = "main"
+category = "dev"
 optional = false
 python-versions = ">=3.7,<4.0"
 
@@ -1201,7 +1201,7 @@ python-versions = "*"
 name = "typing-extensions"
 version = "4.4.0"
 description = "Backported and Experimental Type Hints for Python 3.7+"
-category = "main"
+category = "dev"
 optional = false
 python-versions = ">=3.7"
 
@@ -1260,7 +1260,7 @@ testing = ["flake8 (<5)", "func-timeout", "jaraco.functools", "jaraco.itertools"
 [metadata]
 lock-version = "1.1"
 python-versions = "^3.8"
-content-hash = "f3655d89c2176ea0b0d90bab102b4bf977681250b1d457e64f4061f2339ac5fc"
+content-hash = "470a7763cfe2bac582f3faa2d78bf702ad995ac1ebea77b5bb09d322d612f4df"
 
 [metadata.files]
 astroid = [

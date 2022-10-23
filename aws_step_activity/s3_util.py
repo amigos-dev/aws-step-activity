@@ -10,7 +10,7 @@ from dataclasses import field
 from .logging import logger
 
 from typing import Optional, Type, Any, Dict, Tuple, Generator, IO, List, Union
-from .internal_types import Jsonable, JsonableDict
+from .internal_types import Jsonable, JsonableDict, S3Client, S3_ObjectTypeDef as ObjectTypeDef
 
 import os
 import sys
@@ -18,8 +18,6 @@ import boto3
 import botocore
 import botocore.session
 from boto3 import Session
-from mypy_boto3_s3.client import S3Client, Exceptions as S3Exceptions
-from mypy_boto3_s3.type_defs import ObjectTypeDef
 from botocore.exceptions import ClientError
 from urllib.parse import urlparse
 import urllib.parse
