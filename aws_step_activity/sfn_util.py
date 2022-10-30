@@ -675,7 +675,7 @@ def describe_aws_step_job(
     aws_account = m.group('account')
     job_arn=f'arn:aws:states:{aws_region}:{aws_account}:execution:{state_machine_name}:{jobid}'
 
-  resp = sfn.describe_job(jobArn=job_arn)
+  resp = sfn.describe_execution(executionArn=job_arn)
   result = normalize_jsonable_dict(resp)
 
   return result

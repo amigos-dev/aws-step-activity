@@ -456,7 +456,7 @@ class CommandLineInterface:
         if not optional_job_url is None:
           outputs_url = job_url + '/outputs'
           data['s3_outputs'] = outputs_url
-    result = state_machine.start_job(name=jobid, input_data=data)
+    result = state_machine.start_job(jobid=jobid, input_data=data)
     self.pretty_print(result)
     return 0
 
@@ -709,8 +709,8 @@ class CommandLineInterface:
                             description='''Starts a new job of an AWS stepfunction state machine.''')
     parser_start_job.add_argument('-m', '--state-machine-id', default=None,
                         help='The AWS Step Function state machine name or state machine ARN. By default, environment variable AWS_STEP_STATE_MACHINE is used.')
-    parser_start_job.add_argument('-n', '--name', dest='jobid', default=None,
-                        help='The name of the job. By default, a new guid is used.')
+    parser_start_job.add_argument('-j', '--jobid', default=None,
+                        help='The job ID. By default, a new guid is used.')
     parser_start_job.add_argument('-d', '--data', default=None,
                         help='The base input data, JSON dict string, to pass to the new job. If "@<filename>" is '
                              'provided, the data is read from the specified file. This data can be further modified with'

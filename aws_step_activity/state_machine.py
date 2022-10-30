@@ -820,12 +820,12 @@ class AwsStepStateMachine:
 
   def start_job(
         self,
-        name: Optional[str]=None,
+        jobid: Optional[str]=None,
         input_data: Optional[Union[str, JsonableDict]]=None,
         trace_header: Optional[str]=None,
       ) -> JsonableDict:
-    if name is None:
-      name = self.gen_jobid()
+    if jobid is None:
+      jobid = self.gen_jobid()
     input_data_str: str
     if input_data is None:
       input_data = {}
@@ -835,12 +835,12 @@ class AwsStepStateMachine:
       input_data_str = input_data
     else:
       input_data_str = json.dumps(input_data, sort_keys=True, separators=(',', ':'))
-    params = dict(stateMachineArn=self.state_machine_arn, name=name, input=input_data_str)
+    params = dict(stateMachineArn=self.state_machine_arn, name=jobid, input=input_data_str)
     if trace_header != None:
       params.update(traceHeader=trace_header)
-    resp = self.sfn.start_job(**params)
+    resp = self.sfn.start_execution(**params)
     result = normalize_jsonable_dict(resp)
-    result['name'] = name
+    result['jobid'] = jobid
     result['state_machine_arn'] = self.state_machine_arn
     result['state_machine_name'] = self.state_machine_name
     result['input'] = input_data
@@ -918,7 +918,7 @@ class AwsStepStateMachine:
       params['nextToken'] = next_token
     if not status_filter is None:
       params['statusFilter'] = status_filter
-    resp = self.sfn.list_jobs(**params)
+    resp = self.sfn.list_executions(**params)
     result = normalize_jsonable_dict(resp)
     return result
 
