@@ -24,6 +24,7 @@ import urllib.parse
 import requests
 from io import StringIO
 from io import BytesIO
+import mimetypes
 
 from .util import create_aws_session, full_type, normalize_jsonable_dict
 
@@ -191,11 +192,16 @@ def s3_upload_file_to_object(
       aws_profile=aws_profile,
       aws_region=aws_region
     )
+  extra_args = {}
+  content_type, _ = mimetypes.guess_type(key)
+  if not content_type is None:
+    extra_args.update(ContentType=content_type)
   
   s3.upload_file(
       Filename=filename,
       Bucket=bucket,
-      Key=key
+      Key=key,
+      ExtraArgs=extra_args,
     )
 
 def s3_download_folder(
