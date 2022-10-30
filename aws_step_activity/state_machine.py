@@ -5,7 +5,7 @@
 
 """A client for invoking AWS step functions (
   i.e., creating and monitoring step function state machine
-  executions) that wrap activities implemented by AwsStepActivityWorker"""
+  jobs) that wrap activities implemented by AwsStepActivityWorker"""
 from .logging import logger
 
 import sys
@@ -39,11 +39,11 @@ from .sfn_util import (
     describe_aws_step_activity,
     delete_aws_step_activity,
     describe_aws_step_state_machine,
-    describe_aws_step_execution,
+    describe_aws_step_job,
     is_aws_step_activity_arn,
     get_aws_step_activity_name_from_arn,
     create_aws_step_state_machine,
-    get_aws_step_state_machine_and_execution_names_from_arn,
+    get_aws_step_state_machine_and_jobids_from_arn,
   )
 
 from .s3_util import S3Client, s3_download_object_to_fileobj
@@ -127,7 +127,7 @@ class AwsStepStateMachine:
         timeout_seconds: Optional[Union[int, float]]=None,
         tracingEnabled: bool=True,
         loggingLevel: Optional[str]=None,
-        includeExecutionDataInLogs: Optional[bool]=None,
+        includeJobDataInLogs: Optional[bool]=None,
         loggingDestinations: Optional[List[JsonableDict]]=None,
         add_default_cloudwatch_log_destination: bool=True,
         role_id: Optional[str]=None,
@@ -161,7 +161,7 @@ class AwsStepStateMachine:
         timeout_seconds=timeout_seconds,
         tracingEnabled=tracingEnabled,
         loggingLevel=loggingLevel,
-        includeExecutionDataInLogs=includeExecutionDataInLogs,
+        includeJobDataInLogs=includeJobDataInLogs,
         loggingDestinations=loggingDestinations,
         add_default_cloudwatch_log_destination=add_default_cloudwatch_log_destination,
         role_id=role_id,
@@ -189,7 +189,7 @@ class AwsStepStateMachine:
         state_machine_type: str='STANDARD',
         tracingEnabled: bool=True,
         loggingLevel: Optional[str]=None,
-        includeExecutionDataInLogs: Optional[bool]=None,
+        includeJobDataInLogs: Optional[bool]=None,
         loggingDestinations: Optional[List[JsonableDict]]=None,
         add_default_cloudwatch_log_destination: bool=True,
         role_id: Optional[str]=None,
@@ -264,7 +264,7 @@ class AwsStepStateMachine:
           timeout_seconds=timeout_seconds,
           tracingEnabled=tracingEnabled,
           loggingLevel=loggingLevel,
-          includeExecutionDataInLogs=includeExecutionDataInLogs,
+          includeJobDataInLogs=includeJobDataInLogs,
           loggingDestinations=loggingDestinations,
           add_default_cloudwatch_log_destination=add_default_cloudwatch_log_destination,
           role_id=role_id,
@@ -305,7 +305,7 @@ class AwsStepStateMachine:
         roleArn: Optional[str]=None,
         tracingEnabled: Optional[bool]=None,
         loggingLevel: Optional[str]=None,
-        includeExecutionDataInLogs: Optional[bool]=None,
+        includeJobDataInLogs: Optional[bool]=None,
         loggingDestinations: Optional[List[JsonableDict]]=None
       ):
     definition_str = None if definition is None else json.dumps(definition, sort_keys=True, separators=(',', ':'))
@@ -314,8 +314,8 @@ class AwsStepStateMachine:
       roleArn = self.state_machine_desc['roleArn']
     if not loggingLevel is None:
       loggingConfiguration['level'] = str(loggingLevel)
-    if not includeExecutionDataInLogs is None:
-      loggingConfiguration['includeExecutionData'] = not not includeExecutionDataInLogs
+    if not includeJobDataInLogs is None:
+      loggingConfiguration['includeExecutionData'] = not not includeJobDataInLogs
     if not loggingDestinations is None:
       loggingConfiguration['destinations'] = normalize_jsonable_list(loggingDestinations)
     tracingConfiguration: TracingConfigurationTypeDef = normalize_jsonable_dict(self.state_machine_desc['tracingConfiguration'])
@@ -814,18 +814,18 @@ class AwsStepStateMachine:
     return 'Variable' in choice and choice['Variable'].startswith('$.') and 'IsPresent' in choice and not choice['IsPresent'] and 'Next' in choice
 
   @classmethod  
-  def gen_execution_name(cls) -> str:
+  def gen_jobid(cls) -> str:
     result = datetime.utcnow().isoformat()[:19].replace(':', '-') +'Z-' + str(uuid.uuid4())
     return result
 
-  def start_execution(
+  def start_job(
         self,
         name: Optional[str]=None,
         input_data: Optional[Union[str, JsonableDict]]=None,
         trace_header: Optional[str]=None,
       ) -> JsonableDict:
     if name is None:
-      name = self.gen_execution_name()
+      name = self.gen_jobid()
     input_data_str: str
     if input_data is None:
       input_data = {}
@@ -838,7 +838,7 @@ class AwsStepStateMachine:
     params = dict(stateMachineArn=self.state_machine_arn, name=name, input=input_data_str)
     if trace_header != None:
       params.update(traceHeader=trace_header)
-    resp = self.sfn.start_execution(**params)
+    resp = self.sfn.start_job(**params)
     result = normalize_jsonable_dict(resp)
     result['name'] = name
     result['state_machine_arn'] = self.state_machine_arn
@@ -849,24 +849,24 @@ class AwsStepStateMachine:
 
     return result
 
-  def describe_execution(
+  def describe_job(
         self,
-        execution_id: str,
+        jobid: str,
       ) -> JsonableDict:
-    resp = describe_aws_step_execution(
+    resp = describe_aws_step_job(
         self.sfn,
-        execution_id,
+        jobid,
         state_machine_id=self.state_machine_arn
       )
     result = normalize_jsonable_dict(resp)
-    state_machine_name, execution_name = get_aws_step_state_machine_and_execution_names_from_arn(result['executionArn'])
+    state_machine_name, jobid = get_aws_step_state_machine_and_jobids_from_arn(result['executionArn'])
     result['state_machine_name'] = state_machine_name
-    result['execution_name'] = execution_name
+    result['jobid'] = jobid
     return result
 
-  def wait_for_execution(
+  def wait_for_job(
         self,
-        execution_id: str,
+        jobid: str,
         polling_interval_seconds: Union[float, int]=10,
         max_wait_seconds: Optional[Union[float, int]]=None
       ) -> JsonableDict:
@@ -874,7 +874,7 @@ class AwsStepStateMachine:
     polling_interval_ns = round(polling_interval_seconds * 1000000000.0)
     max_wait_ns: Optional[int] = None if max_wait_seconds is None else round(max_wait_seconds * 1000000000.0)
     while True:
-      result = self.describe_execution(execution_id)
+      result = self.describe_job(jobid)
       if result['status'] != 'RUNNING':
         return result
       sleep_ns = polling_interval_ns
@@ -882,24 +882,24 @@ class AwsStepStateMachine:
         elapsed_ns = monotonic_ns() - start_time_ns
         remaining_ns = max_wait_ns - elapsed_ns
         if remaining_ns <= 0:
-          raise TimeoutError("Timed out waiting for execution to complete")
+          raise TimeoutError("Timed out waiting for job to complete")
         sleep_ns = min(sleep_ns, remaining_ns)
       sleep(sleep_ns/1000000000.0)
 
-  def download_execution_output_file_to_fileobj(
+  def download_job_output_file_to_fileobj(
         self,
-        execution_id: str,
+        jobid: str,
         output_filename: str,
         f: IO,
       ):
-    exec_result = self.describe_execution(execution_id)
+    exec_result = self.describe_job(jobid)
     input_data_str: Optional[str] = exec_result.get('input', None)
     if input_data_str is None:
-      raise RuntimeError(f'Execution metadata does not include input data: {execution_id}')
+      raise RuntimeError(f'Job metadata does not include input data: {jobid}')
     input_data: JsonableDict = json.loads(input_data_str)
     s3_outputs: Optional[str] = input_data.get('s3_outputs', None)
     if s3_outputs is None:
-      raise RuntimeError(f'Execution does not provide s3_outputs: {execution_id}')
+      raise RuntimeError(f'Job does not provide s3_outputs: {jobid}')
     while output_filename.startswith('/'):
       output_filename = output_filename[1:]
     while s3_outputs.endswith('/'):
@@ -907,7 +907,7 @@ class AwsStepStateMachine:
     s3_url = s3_outputs + '/' + output_filename
     s3_download_object_to_fileobj(s3_url, f, s3=self.s3, session=self.session)
 
-  def list_some_executions(
+  def list_some_jobs(
         self,
         max_results: int=1000,
         next_token: Optional[str]=None,
@@ -918,11 +918,11 @@ class AwsStepStateMachine:
       params['nextToken'] = next_token
     if not status_filter is None:
       params['statusFilter'] = status_filter
-    resp = self.sfn.list_executions(**params)
+    resp = self.sfn.list_jobs(**params)
     result = normalize_jsonable_dict(resp)
     return result
 
-  def iter_executions(
+  def iter_jobs(
         self,
         next_token: Optional[str]=None,
         status_filter: Optional[str]=None
@@ -933,5 +933,5 @@ class AwsStepStateMachine:
     paginator = self.sfn.get_paginator('list_executions')
     page_iterator = paginator.paginate(**params)
     for page in page_iterator:
-      for execution_desc in page['executions']:
-        yield normalize_jsonable_dict(execution_desc)
+      for job_desc in page['executions']:
+        yield normalize_jsonable_dict(job_desc)

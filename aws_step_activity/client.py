@@ -5,7 +5,7 @@
 
 """A client for invoking AWS step functions (
   i.e., creating and monitoring step function state machine
-  executions) that wrap activities implemented by AwsStepActivityWorker"""
+  jobs) that wrap activities implemented by AwsStepActivityWorker"""
 from .logging import logger
 
 import sys
@@ -69,7 +69,7 @@ class AwsStepClient:
             The name of this worker node, for use in logging and completion reporting. If None,
             a unique name based on the local MAC address is created. Defaults to None.
         heartbeat_seconds (float, optional):
-            The default number of seconds between heartbeat notifications to AWS while a task execution is in
+            The default number of seconds between heartbeat notifications to AWS while a task job is in
             progress.  Ignored if a particular task has heartbeat_seconds provided in the task parameters, or
             if heartbeat_seconds is provided ad run() time. Defaults to 20.0.
         max_task_total_seconds (Optional[float], optional):

@@ -14,6 +14,7 @@ from .internal_types import Jsonable, JsonableDict
 
 import os
 import subprocess
+import json
 
 from .handler import AwsStepActivityTaskHandler
 
@@ -43,6 +44,9 @@ class AwsStepScriptHandler(AwsStepActivityTaskHandler):
     cwd = self.task_working_dir
     input_dir = self.task_input_dir
     output_dir = self.task_output_dir
+    task_data_file = os.path.join(input_dir, 'task_data.json')
+    with open(task_data_file, 'w') as f:
+      f.write(json.dumps(data, indent=2, sort_keys=True))
     script_file = os.path.join(input_dir, 'script_file')
     with open(script_file, 'w') as f:
       f.write(script_text)

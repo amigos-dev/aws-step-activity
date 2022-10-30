@@ -27,7 +27,7 @@ Introduction
 ------------
 
 Python package `aws-step-activity` provides a command-line tool as well as a runtime API for managing and accessing
-AWS stepfunction state machines, activities, and executions, and for implementing activity task workers.
+AWS stepfunction state machines, activities, jobs (stepfunction executions), and tasks (activity work items), and for implementing activity task workers.
 
 Some key features of aws-step-activity:
 
@@ -76,7 +76,7 @@ poetry shell
 Example
 ========
 
-In this example, you will run a simple script activity worker in terminal 1, then submit an execution to it
+In this example, you will run a simple script activity worker in terminal 1, then submit a job to it
 aand view the results in terminal 2. Note that terminal 1 and terminal 2 may
 be run on physically distinct machines.
 
@@ -116,18 +116,18 @@ poetry install
 poetry shell
 # following commands run in poetry subshell
 export AWS_PROFILE=default  # replace with the AWS profile you want to use
-export EXECUTION_S3_BUCKET="test-bucket-$(aws sts get-caller-identity | jq -r .Account)-$USER"
+export JOB_S3_BUCKET="test-bucket-$(aws sts get-caller-identity | jq -r .Account)-$USER"
 
 mkdir -p test_data
 cd test_data
 export ACTIVITY="$USER-test-activity"
 export STATE_MACHINE="$ACTIVITY-state-machine"
-export EXECUTION_S3_KEY_PREFIX="$USER-test-activity"
-aws s3api create-bucket --bucket "$EXECUTION_S3_BUCKET" --create-bucket-configuration LocationConstraint="$(aws configure get region)"
-export EXECUTION_S3_URL_PREFIX="s3://$EXECUTION_S3_BUCKET/$EXECUTION_S3_KEY_PREFIX"
+export JOB_S3_KEY_PREFIX="$USER-test-activity"
+aws s3api create-bucket --bucket "$JOB_S3_BUCKET" --create-bucket-configuration LocationConstraint="$(aws configure get region)"
+export JOB_S3_URL_PREFIX="s3://$JOB_S3_BUCKET/$JOB_S3_KEY_PREFIX"
 
-# The following should be repeated for each execution submitted
-export EXECUTION_NAME="$(aws-step-activity -r gen-execution-name)"
+# The following should be repeated for each job submitted
+export JOBID="$(aws-step-activity -r gen-jobid)"
 
 # create a script to run in the worker
 cat  >script.sh <<EOF
@@ -149,20 +149,20 @@ cat >inputs/input_data.txt <<EOF
 This is a test input file!
 EOF
 
-# start an execution running
-aws-step-activity --tb -m "$STATE_MACHINE" -s "$EXECUTION_S3_URL_PREFIX" start-execution --name="$EXECUTION_NAME" -i inputs -v script@=script.sh
+# start an job running
+aws-step-activity --tb -m "$STATE_MACHINE" -s "$JOB_S3_URL_PREFIX" start-job --name="$JOBID" -i inputs -v script@=script.sh
 
-# Wait for execution to finish
-aws-step-activity --tb -m "$STATE_MACHINE" wait-for-execution "$EXECUTION_NAME"
+# Wait for job to finish
+aws-step-activity --tb -m "$STATE_MACHINE" wait-for-job "$JOBID"
 
 # Print stdout
-aws-step-activity -m "$STATE_MACHINE" cat-execution-output "$EXECUTION_NAME" stdout.txt
+aws-step-activity -m "$STATE_MACHINE" cat-job-output "$JOBID" stdout.txt
 
 # Print stderr
-aws-step-activity -m "$STATE_MACHINE" cat-execution-output "$EXECUTION_NAME" stderr.txt >&2
+aws-step-activity -m "$STATE_MACHINE" cat-job-output "$JOBID" stderr.txt >&2
 
 # Print the generated output file
-aws-step-activity -m "$STATE_MACHINE" cat-execution-output "$EXECUTION_NAME" test_output_file.txt
+aws-step-activity -m "$STATE_MACHINE" cat-job-output "$JOBID" test_output_file.txt
 ```
 
 

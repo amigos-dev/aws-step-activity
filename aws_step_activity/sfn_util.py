@@ -339,7 +339,7 @@ def create_aws_step_state_machine(
       timeout_seconds: Optional[Union[int, float]]=None,
       tracingEnabled: bool=True,
       loggingLevel: Optional[str]=None,
-      includeExecutionDataInLogs: Optional[bool]=None,
+      includeJobDataInLogs: Optional[bool]=None,
       loggingDestinations: Optional[List[JsonableDict]]=None,
       add_default_cloudwatch_log_destination: bool=True,
       role_id: Optional[str]=None,
@@ -427,8 +427,8 @@ def create_aws_step_state_machine(
   loggingConfiguration: LoggingConfigurationTypeDef = dict()
   if not loggingLevel is None:
     loggingConfiguration['level'] = str(loggingLevel)
-  if not includeExecutionDataInLogs is None:
-    loggingConfiguration['includeExecutionData'] = not not includeExecutionDataInLogs
+  if not includeJobDataInLogs is None:
+    loggingConfiguration['includeExecutionData'] = not not includeJobDataInLogs
   log_destinations: List[JsonableDict] = []
   if not loggingDestinations is None:
     log_destinations.extend(normalize_jsonable_list(loggingDestinations))
@@ -585,16 +585,16 @@ def get_aws_step_activity_name_from_arn(arn: str) -> str:
   return m.group('activity_name')
 
 # arn:aws:states:us-west-2:745019234935:execution:TestRunSelectedActivity:9de2711e-06a3-44d2-b95e-9a93599bd1f8
-_execution_arn_re = re.compile(r'^arn:aws:states:(?P<region>[a-z][a-z0-9\-]+):(?P<account>[0-9]+):execution:(?P<state_machine_name>[^ \t\r\n<>{}[\]?*"#%\\^|~`$,;:/]+):(?P<execution_name>[^ \t\r\n<>{}[\]?*"#%\\^|~`$,;:/]+)$')
+_job_arn_re = re.compile(r'^arn:aws:states:(?P<region>[a-z][a-z0-9\-]+):(?P<account>[0-9]+):execution:(?P<state_machine_name>[^ \t\r\n<>{}[\]?*"#%\\^|~`$,;:/]+):(?P<jobid>[^ \t\r\n<>{}[\]?*"#%\\^|~`$,;:/]+)$')
 
-def is_aws_step_execution_arn(arn: str) -> bool:
-  return not _execution_arn_re.match(arn) is None
+def is_aws_step_job_arn(arn: str) -> bool:
+  return not _job_arn_re.match(arn) is None
 
-def get_aws_step_state_machine_and_execution_names_from_arn(arn: str) -> Tuple[str, str]:
-  m = _execution_arn_re.match(arn)
+def get_aws_step_state_machine_and_jobids_from_arn(arn: str) -> Tuple[str, str]:
+  m = _job_arn_re.match(arn)
   if not m:
-    raise RuntimeError(f'Invalid AWS stepfunction execution ARN: "{arn}"')
-  return m.group('state_machine_name'), m.group('execution_name')
+    raise RuntimeError(f'Invalid AWS stepfunction job ARN: "{arn}"')
+  return m.group('state_machine_name'), m.group('jobid')
 
 # arn:aws:states:us-west-2:745019234935:stateMachine:TestRunSelectedActivity
 _state_machine_arn_re = re.compile(r'^arn:aws:states:(?P<region>[a-z][a-z0-9\-]+):(?P<account>[0-9]+):stateMachine:(?P<state_machine_name>[^ \t\r\n<>{}[\]?*"#%\\^|~`$,;:/]+)$')
@@ -608,9 +608,9 @@ def get_aws_step_state_machine_name_from_arn(arn: str) -> str:
     raise RuntimeError(f'Invalid AWS stepfunction state machine ARN: "{arn}"')
   return m.group('state_machine_name')
 
-def describe_aws_step_execution(
+def describe_aws_step_job(
       sfn: SFNClient,
-      execution_id: str,
+      jobid: str,
       state_machine_id: Optional[str]=None,
     ) -> JsonableDict:
   """Returns the result of SFNClient.describe_execution() for the given state machine name or ARN.
@@ -618,14 +618,14 @@ def describe_aws_step_execution(
   Args:
       sfn (SFNClient):
           The boto3 client for AWS step functions
-      state_machine_id (str):
-          Either an AWS step function execution name, or its ARN
+      jobid (str):
+          Either an AWS step function job name, or its ARN
       state_machine_id (str):
          Either an AWS step function state machine name, or its ARN. May be None
          if state_machine_id is an ARN. Default is None.
 
   Raises:
-      RuntimeError: The specified execution_id does not exist.
+      RuntimeError: The specified jobid does not exist.
       RuntimeError: The specified state_machine_id does not exist.
 
   Returns:
@@ -645,13 +645,13 @@ def describe_aws_step_execution(
               "traceHeader": "Root=1-634368f0-fd3bef0eed732a65fb6e51fb;Sampled=1"
           }
   """
-  execution_arn: str
-  if ':' in execution_id:
-    execution_arn = execution_id
+  job_arn: str
+  if ':' in jobid:
+    job_arn = jobid
   else:
     state_machine_arn: str
     if state_machine_id is None:
-      raise RuntimeError("state_machine_id must be provided if execution_id is not an ARN")
+      raise RuntimeError("state_machine_id must be provided if jobid is not an ARN")
     if ':' in state_machine_id:
       # state_machine_id must be an ARN.
       state_machine_arn = state_machine_id
@@ -673,9 +673,9 @@ def describe_aws_step_execution(
     state_machine_name = m.group('state_machine_name')
     aws_region = m.group('region')
     aws_account = m.group('account')
-    execution_arn=f'arn:aws:states:{aws_region}:{aws_account}:execution:{state_machine_name}:{execution_id}'
+    job_arn=f'arn:aws:states:{aws_region}:{aws_account}:execution:{state_machine_name}:{jobid}'
 
-  resp = sfn.describe_execution(executionArn=execution_arn)
+  resp = sfn.describe_job(jobArn=job_arn)
   result = normalize_jsonable_dict(resp)
 
   return result

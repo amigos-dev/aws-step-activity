@@ -97,7 +97,8 @@ def s3_object_infos_under_path(
   for page in page_iterator:
     if 'Contents' in page:
       for obj_desc in page['Contents']:
-        yield obj_desc
+        if not obj_desc['Key'].endswith('/'):
+          yield obj_desc
   
 
 def s3_object_urls_under_path(

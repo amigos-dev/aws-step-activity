@@ -175,19 +175,19 @@ class CommandLineInterface:
       result += self.get_state_machine_name()
     return result
 
-  def get_execution_s3_base_url(self, execution_name: str) -> Optional[str]:
+  def get_job_s3_base_url(self, jobid: str) -> Optional[str]:
     result = self.get_state_machine_base_url()
     if not result is None:
       if not result.endswith('/'):
         result += '/'
-      result += execution_name
+      result += jobid
     return result
 
-  def require_execution_s3_base_url(self, execution_name: str) -> str:
-    execution_url = self.get_execution_s3_base_url(execution_name)
-    if execution_url is None:
-      raise RuntimeError(f'--s3-base-url must be provided to determine URL of execution data')
-    return execution_url
+  def require_job_s3_base_url(self, jobid: str) -> str:
+    job_url = self.get_job_s3_base_url(jobid)
+    if job_url is None:
+      raise RuntimeError(f'--s3-base-url must be provided to determine URL of job data')
+    return job_url
 
   def get_state_machine(self) -> AwsStepStateMachine:
     if self._state_machine is None:
@@ -390,20 +390,20 @@ class CommandLineInterface:
     state_machine.flush()
     return 0
 
-  def gen_execution_name(self) -> str:
-    return AwsStepStateMachine.gen_execution_name()
+  def gen_jobid(self) -> str:
+    return AwsStepStateMachine.gen_jobid()
 
-  def cmd_gen_execution_name(self) -> int:
-    result = self.gen_execution_name()
+  def cmd_gen_jobid(self) -> int:
+    result = self.gen_jobid()
     self.pretty_print(result)
     return 0
 
-  def cmd_start_execution(self) -> int:
+  def cmd_start_job(self) -> int:
     args = self._args
     data_str: Optional[str] = args.data
-    execution_name: Optional[str] = args.execution_name
-    if execution_name is None:
-      execution_name = self.gen_execution_name()
+    jobid: Optional[str] = args.jobid
+    if jobid is None:
+      jobid = self.gen_jobid()
     data: JsonableDict
     if data_str is None:
       data = {}
@@ -436,8 +436,8 @@ class CommandLineInterface:
         raise ValueError(f'Parameter assignment type must be "str" or "json": "{param_assignment}"')
       data[param_dest] = param_value
 
-    if not 'execution_name' in data:
-      data['execution_name'] = execution_name
+    if not 'jobid' in data:
+      data['jobid'] = jobid
 
     state_machine = self.get_state_machine()
 
@@ -447,82 +447,82 @@ class CommandLineInterface:
       if 's3_inputs' in data:
         inputs_url = data['s3_inputs']
       else:
-        execution_url = self.require_execution_s3_base_url(execution_name)
-        inputs_url = execution_url + '/inputs'
+        job_url = self.require_job_s3_base_url(jobid)
+        inputs_url = job_url + '/inputs'
         data['s3_inputs'] = inputs_url
       s3_upload_folder(inputs_url, input_dir, s3=self.get_s3(), session=self.get_aws_session())
     if not 's3_outputs' in data:
-        optional_execution_url = self.get_execution_s3_base_url(execution_name)
-        if not optional_execution_url is None:
-          outputs_url = execution_url + '/outputs'
+        optional_job_url = self.get_job_s3_base_url(jobid)
+        if not optional_job_url is None:
+          outputs_url = job_url + '/outputs'
           data['s3_outputs'] = outputs_url
-    result = state_machine.start_execution(name=execution_name, input_data=data)
+    result = state_machine.start_job(name=jobid, input_data=data)
     self.pretty_print(result)
     return 0
 
-  def cmd_list_executions(self) -> int:
+  def cmd_list_jobs(self) -> int:
     args = self._args
     max_results: int = args.max_results
     status_filter: Optional[str] = args.status_filter
     next_token: Optional[str] = args.next_token
     state_machine = self.get_state_machine()
-    result = state_machine.list_some_executions(max_results=max_results, next_token=next_token, status_filter=status_filter)
+    result = state_machine.list_some_jobs(max_results=max_results, next_token=next_token, status_filter=status_filter)
     self.pretty_print(result)
     return 0
 
-  def cmd_describe_execution(self) -> int:
+  def cmd_describe_job(self) -> int:
     args = self._args
-    execution_name: str = args.execution_name
+    jobid: str = args.jobid
 
     state_machine = self.get_state_machine()
-    result = state_machine.describe_execution(execution_name)
+    result = state_machine.describe_job(jobid)
     self.pretty_print(result)
     return 0
 
-  def cmd_wait_for_execution(self) -> int:
+  def cmd_wait_for_job(self) -> int:
     args = self._args
     polling_interval_seconds: int = args.polling_interval_seconds
-    execution_name: str = args.execution_name
+    jobid: str = args.jobid
 
     state_machine = self.get_state_machine()
-    result = state_machine.wait_for_execution(execution_name, polling_interval_seconds=polling_interval_seconds, max_wait_seconds=None)
+    result = state_machine.wait_for_job(jobid, polling_interval_seconds=polling_interval_seconds, max_wait_seconds=None)
     self.pretty_print(result)
     return 0
 
-  def download_execution_output_file_to_fileobj(
+  def download_job_output_file_to_fileobj(
         self,
-        execution_id: str,
-        execution_output_filename: str,
+        jobid: str,
+        job_output_filename: str,
         f: IO,
       ) -> None:
     state_machine = self.get_state_machine()
-    state_machine.download_execution_output_file_to_fileobj(
-        execution_id,
-        execution_output_filename,
+    state_machine.download_job_output_file_to_fileobj(
+        jobid,
+        job_output_filename,
         f
       )
 
-  def download_execution_output_file_to_stdout(
+  def download_job_output_file_to_stdout(
         self,
-        execution_id: str,
-        execution_output_filename: str,
+        jobid: str,
+        job_output_filename: str,
       ) -> None:
     with os.fdopen(sys.stdout.fileno(), "wb", closefd=False) as f:
-      self.download_execution_output_file_to_fileobj(execution_id, execution_output_filename, f)
+      self.download_job_output_file_to_fileobj(jobid, job_output_filename, f)
 
-  def download_execution_output_file_to_stderr(
+  def download_job_output_file_to_stderr(
         self,
-        execution_id: str,
-        execution_output_filename: str,
+        jobid: str,
+        job_output_filename: str,
       ) -> None:
     with os.fdopen(sys.stderr.fileno(), "wb", closefd=False) as f:
-      self.download_execution_output_file_to_fileobj(execution_id, execution_output_filename, f)
+      self.download_job_output_file_to_fileobj(jobid, job_output_filename, f)
 
-  def cmd_cat_execution_output(self) -> int:
+  def cmd_cat_job_output(self) -> int:
     args = self._args
-    execution_name: str = args.execution_name
-    execution_output_filename: str = args.execution_output_file
-    self.download_execution_output_file_to_stdout(execution_name, execution_output_filename)
+    jobid: str = args.jobid
+    job_output_filename: str = args.job_output_file
+    self.download_job_output_file_to_stdout(jobid, job_output_filename)
     return 0
 
 
@@ -605,7 +605,7 @@ class CommandLineInterface:
     parser.add_argument('-a', '--activity-id', default=None,
                         help='The AWS Step Function Activity name or Activity ARN. By default, environment variable AWS_STEP_ACTIVITY_ID is used.')
     parser.add_argument('-s', '--s3-base-url', dest='pre_s3_base_url', default=None,
-                        help='The "s3://" URL that is the parent folder for all execution inputs/outputs. By default, environment variable AWS_STEP_S3_BASE_URL is used.')
+                        help='The "s3://" URL that is the parent folder for all job inputs/outputs. By default, environment variable AWS_STEP_S3_BASE_URL is used.')
     parser.set_defaults(func=self.cmd_bare)
 
     subparsers = parser.add_subparsers(
@@ -638,9 +638,9 @@ class CommandLineInterface:
     parser_create_chooser.add_argument('--heartbeat-seconds', type=float, default=60.0,
                         help='The required interval for receiving heartbeats, in seconds. If 0, heartbeats wil not be required. By default, 60 seconds is used.')
     parser_create_chooser.add_argument('--timeout-seconds', type=float, default=600.0,
-                        help='The default maximum execution runtime to entire executions, in seconds. If 0, no limit will be imposed. By default, a 10-minute limit is imposed.')
+                        help='The default maximum job runtime to entire jobs, in seconds. If 0, no limit will be imposed. By default, a 10-minute limit is imposed.')
     parser_create_chooser.add_argument('--activity-timeout-seconds', type=float, default=600.0,
-                        help='The default maximum execution runtime for each activity, in seconds. If 0, no limit will be imposed. By default, the total execution limit is imposed.')
+                        help='The default maximum job runtime for each activity, in seconds. If 0, no limit will be imposed. By default, the total job limit is imposed.')
     parser_create_chooser.add_argument('--default-activity-id', default=None,
                         help='The default chosen activity if none is selected in a job. By default, an error will result if none is chosen.')
     parser_create_chooser.add_argument('-m', '--state-machine-id', default=None,
@@ -697,82 +697,82 @@ class CommandLineInterface:
                         help='The activity name or ARN of the activity to be deleted as a choice.')
     parser_del_activity_choice.set_defaults(func=self.cmd_del_activity_choice)
 
-    # ======================= gen-execution-name
+    # ======================= gen-jobid
 
-    parser_gen_execution_name = subparsers.add_parser('gen-execution-name',
-                            description='''Generates a new unique execution name.''')
-    parser_gen_execution_name.set_defaults(func=self.cmd_gen_execution_name)
+    parser_gen_jobid = subparsers.add_parser('gen-jobid',
+                            description='''Generates a new unique job ID.''')
+    parser_gen_jobid.set_defaults(func=self.cmd_gen_jobid)
 
-    # ======================= start-execution
+    # ======================= start-job
 
-    parser_start_execution = subparsers.add_parser('start-execution',
-                            description='''Starts a new execution of an AWS stepfunction state machine.''')
-    parser_start_execution.add_argument('-m', '--state-machine-id', default=None,
+    parser_start_job = subparsers.add_parser('start-job',
+                            description='''Starts a new job of an AWS stepfunction state machine.''')
+    parser_start_job.add_argument('-m', '--state-machine-id', default=None,
                         help='The AWS Step Function state machine name or state machine ARN. By default, environment variable AWS_STEP_STATE_MACHINE is used.')
-    parser_start_execution.add_argument('-n', '--name', dest='execution_name', default=None,
-                        help='The name of the execution. By default, a new guid is used.')
-    parser_start_execution.add_argument('-d', '--data', default=None,
-                        help='The base input data, JSON dict string, to pass to the new execution. If "@<filename>" is '
+    parser_start_job.add_argument('-n', '--name', dest='jobid', default=None,
+                        help='The name of the job. By default, a new guid is used.')
+    parser_start_job.add_argument('-d', '--data', default=None,
+                        help='The base input data, JSON dict string, to pass to the new job. If "@<filename>" is '
                              'provided, the data is read from the specified file. This data can be further modified with'
                              '-s, -p, -i, and -o options. By default, "{}" is used as data.')
-    parser_start_execution.add_argument('-v', '--param-value', default=[], action='append',
+    parser_start_job.add_argument('-v', '--param-value', default=[], action='append',
                         help='A string in the form "<param-name>[:<param-type>][@]=<param-value>". The named parameter is '
                              'added to the base input data. This option may be repeated. <param-type> may be json or str; by default str '
                              'is assumed. If "@" is appended to the param name, then <param-value> is interpreted as a file from which '
                              'the actual value is read. By default, no parameters are added to the base input data.')
-    parser_start_execution.add_argument('-s', '--s3-base-url', default=None,
-                        help='The "s3://" URL that is the parent folder for all execution inputs/outputs. By default, environment variable AWS_STEP_S3_BASE_URL is used.')
-    parser_start_execution.add_argument('-i', '--input-dir', default=None,
-                        help='The local inputs data folder that should be uploaded to S3 before execution. By default, no folder is uploaded.')
-    parser_start_execution.set_defaults(func=self.cmd_start_execution)
+    parser_start_job.add_argument('-s', '--s3-base-url', default=None,
+                        help='The "s3://" URL that is the parent folder for all job inputs/outputs. By default, environment variable AWS_STEP_S3_BASE_URL is used.')
+    parser_start_job.add_argument('-i', '--input-dir', default=None,
+                        help='The local inputs data folder that should be uploaded to S3 before job. By default, no folder is uploaded.')
+    parser_start_job.set_defaults(func=self.cmd_start_job)
 
-    # ======================= describe-execution
+    # ======================= describe-job
 
-    parser_describe_execution = subparsers.add_parser('describe-execution',
-                            description='''Gets the status of a specific execution of an AWS stepfunction state machine.''')
-    parser_describe_execution.add_argument('-m', '--state-machine-id', default=None,
+    parser_describe_job = subparsers.add_parser('describe-job',
+                            description='''Gets the status of a specific job of an AWS stepfunction state machine.''')
+    parser_describe_job.add_argument('-m', '--state-machine-id', default=None,
                         help='The AWS Step Function state machine name or state machine ARN. By default, environment variable AWS_STEP_STATE_MACHINE is used.')
-    parser_describe_execution.add_argument('execution_name',
-                        help='The name of the execution.')
-    parser_describe_execution.set_defaults(func=self.cmd_describe_execution)
+    parser_describe_job.add_argument('jobid',
+                        help='The name of the job.')
+    parser_describe_job.set_defaults(func=self.cmd_describe_job)
 
-    # ======================= wait-for-execution
+    # ======================= wait-for-job
 
-    parser_wait_for_execution = subparsers.add_parser('wait-for-execution',
-                            description='''Waits for an execution to complete.''')
-    parser_wait_for_execution.add_argument('-m', '--state-machine-id', default=None,
+    parser_wait_for_job = subparsers.add_parser('wait-for-job',
+                            description='''Waits for a job to complete.''')
+    parser_wait_for_job.add_argument('-m', '--state-machine-id', default=None,
                         help='The AWS Step Function state machine name or state machine ARN. By default, environment variable AWS_STEP_STATE_MACHINE is used.')
-    parser_wait_for_execution.add_argument('-p', '--polling-interval-seconds', type=int, default=10,
-                        help='The interval at which to poll AWS for results, in seconds. By default, the execution is polled every 10 seconds')
-    parser_wait_for_execution.add_argument('execution_name',
-                        help='The name of the execution.')
-    parser_wait_for_execution.set_defaults(func=self.cmd_wait_for_execution)
+    parser_wait_for_job.add_argument('-p', '--polling-interval-seconds', type=int, default=10,
+                        help='The interval at which to poll AWS for results, in seconds. By default, the job is polled every 10 seconds')
+    parser_wait_for_job.add_argument('jobid',
+                        help='The name of the job.')
+    parser_wait_for_job.set_defaults(func=self.cmd_wait_for_job)
 
-    # ======================= cat-execution-output
+    # ======================= cat-job-output
 
-    parser_cat_execution_output = subparsers.add_parser('cat-execution-output',
+    parser_cat_job_output = subparsers.add_parser('cat-job-output',
                             description='''Copies the contents of an exetion outputfile to stdout.''')
-    parser_cat_execution_output.add_argument('-m', '--state-machine-id', default=None,
+    parser_cat_job_output.add_argument('-m', '--state-machine-id', default=None,
                         help='The AWS Step Function state machine name or state machine ARN. By default, environment variable AWS_STEP_STATE_MACHINE is used.')
-    parser_cat_execution_output.add_argument('execution_name',
-                        help='The name of the execution.')
-    parser_cat_execution_output.add_argument('execution_output_file',
-                        help='The name of the execution output file, relative to the execution\'s S3 output folder.')
-    parser_cat_execution_output.set_defaults(func=self.cmd_cat_execution_output)
+    parser_cat_job_output.add_argument('jobid',
+                        help='The name of the job.')
+    parser_cat_job_output.add_argument('job_output_file',
+                        help='The name of the job output file, relative to the job\'s S3 output folder.')
+    parser_cat_job_output.set_defaults(func=self.cmd_cat_job_output)
 
-    # ======================= list-executions
+    # ======================= list-jobs
 
-    parser_list_executions = subparsers.add_parser('list-executions',
-                            description='''Lists a subset of the executions associated with the state machine.''')
-    parser_list_executions.add_argument('-m', '--state-machine-id', default=None,
+    parser_list_jobs = subparsers.add_parser('list-jobs',
+                            description='''Lists a subset of the jobs associated with the state machine.''')
+    parser_list_jobs.add_argument('-m', '--state-machine-id', default=None,
                         help='The AWS Step Function state machine name or state machine ARN. By default, environment variable AWS_STEP_STATE_MACHINE is used.')
-    parser_list_executions.add_argument('-n', '--max-results', type=int, default=1000,
+    parser_list_jobs.add_argument('-n', '--max-results', type=int, default=1000,
                         help='The maximum number of results to return. Must be <= 1000. By default, 1000 is used.')
-    parser_list_executions.add_argument('-s', '--status', dest='status_filter', default=None,
-                        help='The a filter for matching status values. By default, all executions are returned regardless of status.')
-    parser_list_executions.add_argument('-t', '--next-token', default=None,
+    parser_list_jobs.add_argument('-s', '--status', dest='status_filter', default=None,
+                        help='The a filter for matching status values. By default, all jobs are returned regardless of status.')
+    parser_list_jobs.add_argument('-t', '--next-token', default=None,
                         help='The nextToken value from the previous invocation, to continue listing. By default, starts at the beginning.')
-    parser_list_executions.set_defaults(func=self.cmd_list_executions)
+    parser_list_jobs.set_defaults(func=self.cmd_list_jobs)
 
 
     # ======================= sign-s3-upload
