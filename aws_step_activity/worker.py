@@ -11,12 +11,12 @@ import sys
 from time import sleep
 from typing import TYPE_CHECKING, Optional, Dict, Type, Union
 from types import TracebackType
-
-from .internal_types import Jsonable, JsonableDict, SFNClient
+from .internal_types import Jsonable, JsonableDict, SFNClient, AwsStepActivityTaskHandlerClass
 
 import boto3
 from boto3 import Session
 from botocore.exceptions import ReadTimeoutError
+from botocore.config import Config as BotoCoreConfig
 from .util import create_aws_session, full_type
 from .sfn_util import describe_aws_step_activity
 
@@ -38,32 +38,36 @@ from .task import AwsStepActivityTask
 
 if TYPE_CHECKING:
   from .handler import AwsStepActivityTaskHandler
-  
+
 class AwsStepActivityWorker:
   mutex: Lock
   cv: Condition
   session: Session
   sfn: SFNClient
+  long_poll_sfn: SFNClient
   activity_name: str
+  activity_full_name: str
   activity_arn: str
   activity_creation_date: datetime
-  worker_name: str
+  worker_instance_name: str
   shutting_down: bool = False
   heartbeat_seconds: float
   max_task_total_seconds: Optional[float]
-  default_task_handler_class: Optional[Type['AwsStepActivityTaskHandler']] = None
+  default_task_handler_class: Optional[AwsStepActivityTaskHandlerClass] = None
   task_working_dir_parent: str
+  activity_prefix: str
 
   def __init__(
         self,
         activity_id: str,
+        activity_prefix: Optional[str]=None,
         session: Optional[Session]=None,
         aws_profile: Optional[str]=None,
         aws_region: Optional[str]=None,
-        worker_name: Optional[str]=None,
+        worker_instance_name: Optional[str]=None,
         heartbeat_seconds: float=20.0,
         max_task_total_seconds: Optional[float]=None,
-        default_task_handler_class: Optional[Union[str, Type['AwsStepActivityTaskHandler']]]=None,
+        default_task_handler_class: Optional[Union[str, AwsStepActivityTaskHandlerClass]]=None,
         task_working_dir_parent: Optional[str] = None
       ):
     """Create a new worker associated with a specific AWS step function activity
@@ -81,7 +85,7 @@ class AwsStepActivityWorker:
         aws_region (Optional[str], optional):
             The AWS region to use for creation of a new session. Ignored if session is provided. If None,
             the default region for the AWS profile is used. Defaults to None.
-        worker_name (Optional[str], optional):
+        worker_instance_name (Optional[str], optional):
             The name of this worker node, for use in logging and completion reporting. If None,
             a unique name based on the local MAC address is created. Defaults to None.
         heartbeat_seconds (float, optional):
@@ -100,9 +104,12 @@ class AwsStepActivityWorker:
             The parent directory under which task working directories should be created. If None,
             './tasks' is used
     """
-    if worker_name is None:
-      worker_name = f'{uuid.getnode():016x}'
-    self.worker_name = worker_name
+    if activity_prefix is None:
+      activity_prefix = ''
+    self.activity_prefix = activity_prefix
+    if worker_instance_name is None:
+      worker_instance_name = f'{uuid.getnode():016x}'
+    self.worker_instance_name = worker_instance_name
     self.heartbeat_seconds = heartbeat_seconds
     self.max_task_total_seconds = max_task_total_seconds
     self.default_task_handler_class = self.resolve_handler_class(default_task_handler_class)
@@ -121,15 +128,22 @@ class AwsStepActivityWorker:
     sfn = self.session.client('stepfunctions')
     self.sfn = sfn
 
-    resp = describe_aws_step_activity(sfn, activity_id)
+    # we use a specially configured stepfunctions client for long polling the activity task queue,
+    # so that botocore doesn't time out before AWS does
+    bc_config = BotoCoreConfig(read_timeout=1200, region_name=self.session.region_name)
+    long_poll_sfn = self.session.client('stepfunctions', config=bc_config)
+    self.long_poll_sfn = sfn
+
+    resp = describe_aws_step_activity(sfn, activity_id, activity_prefix=activity_prefix)
 
     self.activity_arn: str = resp['activityArn']
     self.activity_name: str = resp['name']
+    self.activity_full_name: str = resp['full_name']
     self.activity_creation_date = dateutil_parse(resp['creationDate'])
     
   def resolve_handler_class(
         self,
-        handler_class: Optional[Union[str, Type['AwsStepActivityTaskHandler']]]) -> Type['AwsStepActivityTaskHandler']:
+        handler_class: Optional[Union[str, AwsStepActivityTaskHandlerClass]]) -> AwsStepActivityTaskHandlerClass:
     from .handler import AwsStepActivityTaskHandler
     if handler_class is None:
       handler_class = self.default_task_handler_class
@@ -175,7 +189,7 @@ class AwsStepActivityWorker:
     """
     try:
       logger.debug(f"Waiting for AWS step function activity task on ARN={self.activity_arn}, name={self.activity_name}")
-      resp = self.sfn.get_activity_task(activityArn=self.activity_arn, workerName=self.worker_name)
+      resp = self.long_poll_sfn.get_activity_task(activityArn=self.activity_arn, workerName=self.worker_instance_name)
     except ReadTimeoutError:
       return None
     if not 'taskToken' in resp:
@@ -221,7 +235,7 @@ class AwsStepActivityWorker:
         f"Starting AWS step function activity worker on "
           f"activity ARN='{self.activity_arn}', "
           f"activity name='{self.activity_name}', "
-          f"worker name='{self.worker_name}'"
+          f"worker instance name='{self.worker_instance_name}'"
       )
     while not self.shutting_down:
       task = self.get_next_task()
@@ -229,7 +243,7 @@ class AwsStepActivityWorker:
         logger.debug(f"AWS stepfunctions.get_next_task(activity_arn='{self.activity_arn}') long poll timed out... retrying")
       else:
         self.run_task(task)
-    logger.info(f"Stopping AWS step function activity worker, name='{self.worker_name}")
+    logger.info(f"Stopping AWS step function activity worker, instance name='{self.worker_instance_name}")
 
   def shutdown(self):
     self.shutting_down = True

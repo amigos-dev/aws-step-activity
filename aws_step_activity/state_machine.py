@@ -6,32 +6,26 @@
 """A client for invoking AWS step functions (
   i.e., creating and monitoring step function state machine
   jobs) that wrap activities implemented by AwsStepActivityWorker"""
-from .logging import logger
 
-import sys
 from time import monotonic_ns, sleep
-from typing import TYPE_CHECKING, Optional, Dict, Type, Union, List, Tuple, Set, Any, Generator, IO
-from types import TracebackType
-
+from typing import Optional, Dict, Union, List, Tuple, Set, Any, Generator, IO
 from .internal_types import (
-    Jsonable,
     JsonableDict,
     SFNClient,
     SFN_LoggingConfigurationTypeDef as LoggingConfigurationTypeDef,
-    SFN_TracingConfigurationTypeDef as TraingConfigurationTypeDef,
+    SFN_TracingConfigurationTypeDef as TracingConfigurationTypeDef,
   )
 
-
-import boto3
 from boto3 import Session
-from botocore.exceptions import ReadTimeoutError
+from threading import Lock, Condition
+import json
+import uuid
+from datetime import datetime
 
+from .logging import logger
 from .util import (
-    create_aws_session,
-    full_type,
     normalize_jsonable_dict,
     normalize_jsonable_list,
-    get_aws_account
   )
 
 from .sfn_util import (
@@ -43,26 +37,16 @@ from .sfn_util import (
     is_aws_step_activity_arn,
     get_aws_step_activity_name_from_arn,
     create_aws_step_state_machine,
-    get_aws_step_state_machine_and_jobids_from_arn,
+    get_aws_step_state_machine_and_jobid_from_arn,
   )
 
 from .s3_util import S3Client, s3_download_object_to_fileobj
 
-import threading
-from threading import Thread, Lock, Condition
+class NO_VALUE_CLASS:
+  pass
 
-import json
-import uuid
-import time
-import traceback
-import hashlib
-import os
-import sys
-from datetime import datetime
-from dateutil.parser import parse as dateutil_parse
+NO_VALUE = NO_VALUE_CLASS()
 
-from .constants import DEFAULT_AWS_STEP_ACTIVITY_TASK_HANDLER_CLASS_NAME
-from .task import AwsStepActivityTask
 
 class AwsStepStateMachine:
   mutex: Lock
@@ -72,13 +56,19 @@ class AwsStepStateMachine:
   s3: S3Client
   state_machine_desc: JsonableDict
   state_machine_name: str
+  full_state_machine_name: str
   state_machine_arn: str
+  state_machine_prefix: str
+  activity_prefix: str
+
   _definition: JsonableDict
   dirty: bool = False
 
   def __init__(
         self,
         state_machine_id: str,
+        state_machine_prefix: str='',
+        activity_prefix: Optional[str]=None,
         session: Optional[Session]=None,
         aws_profile: Optional[str]=None,
         aws_region: Optional[str]=None,
@@ -103,6 +93,9 @@ class AwsStepStateMachine:
     self.mutex = Lock()
     self.cv = Condition(self.mutex)
 
+    self.state_machine_prefix = state_machine_prefix
+    self.activity_prefix = state_machine_prefix if activity_prefix is None else activity_prefix
+
     if session is None:
       session = Session(profile_name=aws_profile, region_name=aws_region)
 
@@ -113,13 +106,15 @@ class AwsStepStateMachine:
     s3 = self.session.client('s3')
     self.s3 = s3
 
-    desc = describe_aws_step_state_machine(sfn, state_machine_id)
+    desc = describe_aws_step_state_machine(sfn, state_machine_id, state_machine_prefix=state_machine_prefix)
     self._refresh_from_desc(desc)
 
   @classmethod
   def create(
         cls,
         state_machine_id: str,
+        state_machine_prefix: str='',
+        activity_prefix: Optional[str]=None,
         states: Optional[Dict[str, JsonableDict]]=None,
         start_at: str= 'Start',
         comment: Optional[str]=None,
@@ -153,6 +148,7 @@ class AwsStepStateMachine:
       session = Session(profile_name=aws_profile, region_name=aws_region)
     desc = create_aws_step_state_machine(
         state_machine_id=state_machine_id,
+        state_machine_prefix=state_machine_prefix,
         states=states,
         session=session,
         start_at=start_at,
@@ -176,13 +172,15 @@ class AwsStepStateMachine:
         allow_role_exists=allow_role_exists,
         allow_exists=allow_exists,
       )
-    result = AwsStepStateMachine(desc['stateMachineArn'], session=session)
+    result = AwsStepStateMachine(desc['stateMachineArn'], session=session, state_nachine_prefix=state_machine_prefix, activity_prefix=activity_prefix)
     return result
 
   @classmethod
   def create_with_activity_choices(
         cls,
         state_machine_id: str,
+        state_machine_prefix: str='',
+        activity_prefix: Optional[str]=None,
         activity_ids: Optional[List[str]]=None,
         default_activity_id: Optional[str]=None,
         comment: Optional[str]=None,
@@ -210,6 +208,8 @@ class AwsStepStateMachine:
         aws_profile: Optional[str]=None,
         aws_region: Optional[str]=None,
       ) -> 'AwsStepStateMachine':
+    if activity_prefix is None:
+      activity_prefix = state_machine_prefix
     if not timeout_seconds is None and timeout_seconds == 0.0:
       timeout_seconds = None
     if not activity_timeout_seconds is None and activity_timeout_seconds == 0.0:
@@ -227,12 +227,12 @@ class AwsStepStateMachine:
     activity_map: Dict[str, str] = {}  # map from activity name to activity ARN
     default_activity_name: Optional[str] = None
     if not default_activity_id is None:
-      default_activity_info = create_aws_step_activity(sfn, default_activity_id, allow_exists=True)
+      default_activity_info = create_aws_step_activity(sfn, default_activity_id, allow_exists=True, activity_prefix=activity_prefix)
       default_activity_arn = default_activity_info['activityArn']
       default_activity_name = default_activity_info['name']
       activity_map[default_activity_name] = default_activity_arn
     for activity_id in activity_ids:
-      activity_info = create_aws_step_activity(sfn, activity_id, allow_exists=True)
+      activity_info = create_aws_step_activity(sfn, activity_id, allow_exists=True, activity_prefix=activity_prefix)
       activity_arn = activity_info['activityArn']
       activity_map[activity_info['name']] = activity_arn
 
@@ -256,6 +256,8 @@ class AwsStepStateMachine:
       states[f'Run-{activity_name}'] = state
     result = cls.create(
           state_machine_id=state_machine_id,
+          state_machine_prefix=state_machine_prefix,
+          activity_prefix=activity_prefix,
           states=states,
           session=session,
           start_at='Start',
@@ -336,6 +338,7 @@ class AwsStepStateMachine:
     self.state_machine_desc = desc
     self.state_machine_arn = desc['stateMachineArn']
     self.state_machine_name = desc['name']
+    self.state_machine_full_name = desc['full_name']
     self._definition = json.loads(desc['definition'])
     self.dirty = False
 
@@ -605,6 +608,80 @@ class AwsStepStateMachine:
     for deleted_state in deleted_states:
       self.del_state(deleted_state)
 
+
+  def describe_activity_chooser(
+        self,
+        state_name: str="SelectActivity",
+        activity_prefix: Optional[Union[NO_VALUE_CLASS, str]]=NO_VALUE_CLASS,
+      ) -> Tuple[List[str], Optional[str]]:
+    """Returns a description of an activity chooser state machine.
+
+    Args:
+        state_name (str, optional): The activity choice state name. Defaults to "SelectActivity".
+
+    Raises:
+        RuntimeError: The state is not a valid activity choice state
+
+    Returns:
+        A JsonableDict:
+        {
+          name: state machine short name
+          full_name: state machine full name
+          arn: state machine arn
+          activity_prefix: The activity name prefix
+          param_name: The name of the task parameter that drives the choice
+          default_choice: The default choice name, or None
+          choice_state_name: The name of the state that performes the selection
+          choices:
+            {
+              <choice-name>: {
+                state_name: The name of the state that will be invoked by this choice
+                activity_arn: The arn of the activity that will be invoked by the chose state
+                activity_full_name: The full name of the activity that will be invoked
+                activity_name: The name of the activity (with prefix removed)
+              }
+              ...
+            }
+        }
+    """
+    if isinstance(activity_prefix, NO_VALUE_CLASS):
+      activity_prefix = self.activity_prefix
+    param_name, choice_map = self.get_param_choice_next_states(state_name)
+    default_choice_name: Optional[str] = None
+    choices: JsonableDict = {}
+    next_state_to_choice_name: Dict[str, str] = {}
+    default_choice_next_state: Optional[str] = None
+    for choice_name, next_state in choice_map.items():
+      if choice_name is None:
+        default_choice_next_state = next_state
+      else:
+        next_state_info = self.get_state(next_state)
+        if next_state_info['Type'] != 'Task':
+          raise RuntimeError(f'State "{state_name}" next state "{next_state}" is not a Task state')
+        next_activity_arn = next_state_info['Resource']
+        if not is_aws_step_activity_arn(next_activity_arn):
+          raise RuntimeError(f'State "{state_name}" next state "{next_state}" is not an activity Task state')
+        next_activity_name = get_aws_step_activity_name_from_arn(next_activity_arn, activity_prefix=activity_prefix)
+        next_activity_full_name = activity_prefix + next_activity_name
+        choice_info = dict(state_name=next_state, activity_arn=next_activity_arn, activity_name=next_activity_name, activity_full_name=next_activity_full_name)
+        choices[choice_name] = choice_info
+        if not next_state in next_state_to_choice_name:
+          next_state_to_choice_name[next_state] = choice_name
+    if not default_choice_next_state is None:
+      default_choice_name = next_state_to_choice_name.get(default_choice_next_state, None)
+
+    result = dict(
+        name=self.state_machine_name,
+        full_name= self.state_machine_full_name,
+        arn=self.state_machine_arn,
+        activity_prefix=activity_prefix,
+        param_name=param_name,
+        default_choice=default_choice_name,
+        choice_state_name=state_name,
+        choices=choices,
+      )
+    return result
+
   def get_activity_choices(
         self,
         state_name: str="SelectActivity",
@@ -632,7 +709,7 @@ class AwsStepStateMachine:
       next_activity_arn = next_state_info['Resource']
       if not is_aws_step_activity_arn(next_activity_arn):
         raise RuntimeError(f'State "{state_name}" next state "{next_state}" is not an activity Task state')
-      actual_activity_name = get_aws_step_activity_name_from_arn(next_activity_arn)
+      actual_activity_name = get_aws_step_activity_name_from_arn(next_activity_arn, activity_prefix=self.activity_prefix)
       if not activity_name is None and activity_name != actual_activity_name:
         raise RuntimeError(f'State "{state_name}" choice "{activity_name}" does not match activity name in target state "{actual_activity_name}"')
       activity_names.add(actual_activity_name)
@@ -842,7 +919,7 @@ class AwsStepStateMachine:
     result = normalize_jsonable_dict(resp)
     result['jobid'] = jobid
     result['state_machine_arn'] = self.state_machine_arn
-    result['state_machine_name'] = self.state_machine_name
+    result['state_machine_full_name'] = self.state_machine_full_name
     result['input'] = input_data
     if not trace_header is None:
       result['trace_header'] = trace_header
@@ -856,11 +933,12 @@ class AwsStepStateMachine:
     resp = describe_aws_step_job(
         self.sfn,
         jobid,
-        state_machine_id=self.state_machine_arn
+        state_machine_id=self.state_machine_arn,
+        state_machine_prefix=self.state_machine_prefix,
       )
     result = normalize_jsonable_dict(resp)
-    state_machine_name, jobid = get_aws_step_state_machine_and_jobids_from_arn(result['executionArn'])
-    result['state_machine_name'] = state_machine_name
+    state_machine_full_name, jobid = get_aws_step_state_machine_and_jobid_from_arn(result['executionArn'])
+    result['state_machine_full_name'] = state_machine_full_name
     result['jobid'] = jobid
     return result
 
@@ -924,10 +1002,9 @@ class AwsStepStateMachine:
 
   def iter_jobs(
         self,
-        next_token: Optional[str]=None,
         status_filter: Optional[str]=None
       ) -> Generator[JsonableDict, None, None]:
-    params: Dict[str, Any] = dict(stateMachineArn=self.state_machine_arn, maxResults=max_results)
+    params: Dict[str, Any] = dict(stateMachineArn=self.state_machine_arn, maxResults=1000)
     if not status_filter is None:
       params['statusFilter'] = status_filter
     paginator = self.sfn.get_paginator('list_executions')

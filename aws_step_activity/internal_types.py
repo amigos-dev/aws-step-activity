@@ -35,7 +35,7 @@ from typing import (
   )
 
 from botocore.exceptions import ClientError
-from botocore.client import BaseClient
+from botocore.client import BaseClient as BotoBaseClient
 
 # Only use mypy during type-checking (these libraries are not included in
 # non-development install)
@@ -51,11 +51,11 @@ if TYPE_CHECKING:
       TracingConfigurationTypeDef as SFN_TracingConfigurationTypeDef
     )
 else:
-  SFNClient = BaseClient
-  S3Client = BaseClient
-  CloudWatchLogsClient = BaseClient
-  IAMClient = BaseClient
-  STSClient = BaseClient
+  SFNClient = BotoBaseClient
+  S3Client = BotoBaseClient
+  CloudWatchLogsClient = BotoBaseClient
+  IAMClient = BotoBaseClient
+  STSClient = BotoBaseClient
   S3_ObjectTypeDef = Dict[str, Any]
   SFN_LoggingConfigurationTypeDef = Dict[str, Any]
   SFN_TracingConfigurationTypeDef = Dict[str, Any]
@@ -75,3 +75,8 @@ JsonableDict = Dict[str, Jsonable]
 
 JsonableList = List[Jsonable]
 """A type hint for a simple JSON-serializable list; i.e., Stist[Jsonable]"""
+
+if TYPE_CHECKING:
+  from .handler import AwsStepActivityTaskHandler
+
+AwsStepActivityTaskHandlerClass = Type['AwsStepActivityTaskHandler']

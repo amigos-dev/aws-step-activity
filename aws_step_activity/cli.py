@@ -90,6 +90,8 @@ class CommandLineInterface:
   _aws_session: Optional[Session] = None
   _sfn: Optional[SFNClient] = None
   _s3: Optional[S3Client] = None
+  _state_machine_prefix: Optional[str] = None
+  _activity_prefix: Optional[str] = None
   _activity_id: Optional[str] = None
   _state_machine_id: Optional[str] = None
   _state_machine: Optional[AwsStepStateMachine] = None
@@ -127,6 +129,24 @@ class CommandLineInterface:
       self._s3 = self.get_aws_session().client('s3')
     return self._s3
 
+  def get_state_machine_prefix(self) -> str:
+    if self._state_machine_prefix is None:
+      state_machine_prefix: Optional[str] = self._args.state_machine_prefix
+      if state_machine_prefix is None:
+        state_machine_prefix = os.environ.get('AWS_STEP_STATE_MACHINE_PREFIX', None)
+      self._state_machine_prefix = state_machine_prefix
+    return self._state_machine_prefix
+
+  def get_activity_prefix(self) -> str:
+    if self._activity_prefix is None:
+      activity_prefix: Optional[str] = self._args.activity_prefix
+      if activity_prefix is None:
+        activity_prefix = os.environ.get('AWS_STEP_ACTIVITY_PREFIX', None)
+        if activity_prefix is None:
+          activity_prefix = self.get_state_machine_prefix()
+      self._activity_prefix = activity_prefix
+    return self._activity_prefix
+
   def get_activity_id(self) -> str:
     if self._activity_id is None:
       activity_id: Optional[str] = self._args.activity_id
@@ -152,8 +172,11 @@ class CommandLineInterface:
   def get_state_machine_name(self) -> str:
     state_machine_name = self.get_state_machine_id()
     if ':' in state_machine_name:
-      state_machine_name = get_aws_step_state_machine_name_from_arn(state_machine_name)
+      state_machine_name = get_aws_step_state_machine_name_from_arn(state_machine_name, state_machine_prefix=self.get_state_machine_prefix())
     return state_machine_name
+
+  def get_state_machine_full_name(self) -> str:
+    return self.get_state_machine_prefix() + self.get_state_machine_name()
 
   def get_s3_base_url(self) -> Optional[str]:
     if not self._have_s3_base_url:
@@ -172,7 +195,7 @@ class CommandLineInterface:
     if not result is None:
       if not result.endswith('/'):
         result += '/'
-      result += self.get_state_machine_name()
+      result += self.get_state_machine_full_name()
     return result
 
   def get_job_s3_base_url(self, jobid: str) -> Optional[str]:
@@ -191,7 +214,12 @@ class CommandLineInterface:
 
   def get_state_machine(self) -> AwsStepStateMachine:
     if self._state_machine is None:
-      self._state_machine = AwsStepStateMachine(self.get_state_machine_id(), session=self.get_aws_session())
+      self._state_machine = AwsStepStateMachine(
+          self.get_state_machine_id(),
+          session=self.get_aws_session(),
+          state_machine_prefix=self.get_state_machine_prefix(),
+          activity_prefix=self.get_activity_prefix()
+        )
     return self._state_machine
 
   def pretty_print(
@@ -258,24 +286,31 @@ class CommandLineInterface:
     return 0
 
   def cmd_list_activities(self) -> int:
+    activity_prefix = self.get_activity_prefix()
+    logger.error(f"state_machine_prefix={self.get_state_machine_prefix()}")
+    logger.error(f"activity_prefix={activity_prefix}")
     sfn = self.get_sfn()
     paginator = sfn.get_paginator('list_activities')
     page_iterator = paginator.paginate()
     result: JsonableList = []
     for page in page_iterator:
       for act_desc in page['activities']:
-        result.append(dict(
-            name=act_desc['name'],
-            activityArn=act_desc['activityArn'],
-            creationDate=str(act_desc['creationDate'])
-          ))
+        activity_full_name = act_desc['name']
+        if activity_full_name.startswith(activity_prefix):
+          activity_name = activity_full_name[len(activity_prefix):]
+          result.append(dict(
+              name=activity_name,
+              full_name=activity_full_name,
+              activityArn=act_desc['activityArn'],
+              creationDate=str(act_desc['creationDate'])
+            ))
     self.pretty_print(result)
     return 0
 
   def cmd_describe_activity(self) -> int:
     activity_id = self.get_activity_id()
     sfn = self.get_sfn()
-    resp = describe_aws_step_activity(sfn, activity_id)
+    resp = describe_aws_step_activity(sfn, activity_id, activity_prefix=self.get_activity_prefix())
     self.pretty_print(resp)
     return 0
 
@@ -288,8 +323,9 @@ class CommandLineInterface:
         max_task_total_seconds = None
     worker = AwsStepActivityWorker(
         self.get_activity_id(),
+        activity_prefix=self.get_activity_prefix(),
         session=self.get_aws_session(),
-        worker_name=args.worker_name,
+        worker_instance_name=args.worker_instance_name,
         heartbeat_seconds=args.heartbeat_seconds,
         max_task_total_seconds=max_task_total_seconds,
         default_task_handler_class=args.default_task_handler_class
@@ -315,6 +351,8 @@ class CommandLineInterface:
     activity_ids: List[str] = args.choice_activity_ids
     state_machine = AwsStepStateMachine.create_with_activity_choices(
         state_machine_id,
+        state_machine_prefix=self.get_state_machine_prefix(),
+        activity_prefix=self.get_activity_prefix(),
         activity_ids=activity_ids,
         default_activity_id=default_activity_id,
         timeout_seconds=timeout_seconds,
@@ -330,15 +368,7 @@ class CommandLineInterface:
     args = self._args
     state_machine = self.get_state_machine()
     activity_names, default_activity_name = state_machine.get_activity_choices()
-    result: JsonableDict = dict(
-        activity_names=activity_names,
-        param_name='activity',
-        state_machine_arn=state_machine.state_machine_arn,
-        state_machine_name=state_machine.state_machine_name,
-        choice_state='SelectActivity',
-        )
-    if not default_activity_name is None:
-      result['default_activity_name'] = default_activity_name
+    result: JsonableDict = state_machine.describe_activity_chooser(activity_prefix=self.get_activity_prefix())
     self.pretty_print(result)
     return 0
 
@@ -600,6 +630,11 @@ class CommandLineInterface:
                         help='The AWS profile to use. Default is to use the default AWS settings')
     parser.add_argument('--aws-region', default=None,
                         help='The AWS region to use. Default is to use the default AWS region for the selected profile')
+    parser.add_argument('--state-machine-prefix', default=None,
+                        help='The AWS Step Function state machine name prefix (prepended to all state machine names in commands). By default, environment variable AWS_STEP_STATE_MACHINE_PREFIX is used, or "".')
+    parser.add_argument('--activity-prefix', default=None,
+                        help='The AWS Step Function activity name prefix (prepended to all activity names in commands). By default, environment variable '
+                             'AWS_STEP_ACTIVITY_PREFIX is used, or the value of --state-machine-prefix.')
     parser.add_argument('-m', '--state-machine-id', dest='pre_state_machine_id', default=None,
                         help='The AWS Step Function state machine name or state machine ARN. By default, environment variable AWS_STEP_STATE_MACHINE is used.')
     parser.add_argument('-a', '--activity-id', default=None,
@@ -799,8 +834,8 @@ class CommandLineInterface:
 
     parser_run = subparsers.add_parser('run',
                             description='''Run an AWS step activity worker.''')
-    parser_run.add_argument('-w', '--worker-name', default=None,
-                        help='The worker name, used for logging and completion rep[orting]. By default, a unique ID mased on local MAC address is used.')
+    parser_run.add_argument('--worker-instance-name', default=None,
+                        help='The worker instance name, used for logging and completion rep[orting]. By default, a unique ID mased on activity and local MAC address is used.')
     parser_run.add_argument('--heartbeat-seconds', type=float, default=20.0,
                         help='The default interval for sending heartbeats, in seconds. Overridden by task definition. By default, 20.0 seconds is used.')
     parser_run.add_argument('--max-task-total-seconds', type=float, default=None,

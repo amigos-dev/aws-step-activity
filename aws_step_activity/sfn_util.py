@@ -43,7 +43,8 @@ from .util import (
 
 def describe_aws_step_state_machine(
       sfn: SFNClient,
-      state_machine_id: str
+      state_machine_id: str,
+      state_machine_prefix: str='',
     ) -> JsonableDict:
   """Returns the result of SFNClient.describe_state_machine() for the given state machine name or ARN.
 
@@ -89,18 +90,26 @@ def describe_aws_step_state_machine(
   else:
     # state_machine_id must be a state machine name. Enumerate all state machines and
     # find the matching name
-    state_machine_name_to_arn: Dict[str, str] = {}
+    state_machine_full_name = state_machine_prefix + state_machine_id
+    state_machine_full_name_to_arn: Dict[str, str] = {}
     paginator = sfn.get_paginator('list_state_machines')
     page_iterator = paginator.paginate()
     for page in page_iterator:
       for state_machine_desc in page['stateMachines']:
-        state_machine_name_to_arn[state_machine_desc['name']] = state_machine_desc['stateMachineArn']
-    if not state_machine_id in state_machine_name_to_arn:
-      raise RuntimeError(f"AWS stepfunctions state machine name '{state_machine_id}' was not found")
-    state_machine_arn = state_machine_name_to_arn[state_machine_id]
+        state_machine_full_name_to_arn[state_machine_desc['name']] = state_machine_desc['stateMachineArn']
+    if not state_machine_full_name in state_machine_full_name_to_arn:
+      raise RuntimeError(f"AWS stepfunctions state machine name '{state_machine_full_name}' was not found")
+    state_machine_arn = state_machine_full_name_to_arn[state_machine_full_name]
 
   resp = sfn.describe_state_machine(stateMachineArn=state_machine_arn)
   result = normalize_jsonable_dict(resp)
+  state_machine_full_name = result['name']
+  if not state_machine_full_name.startswith(state_machine_prefix):
+    raise RuntimeError(f'State machine full name "{state_machine_full_name}" does not start with required prefix "{state_machine_prefix}"')
+
+  state_machine_name = state_machine_full_name[len(state_machine_prefix):]
+  result['full_name'] = state_machine_full_name
+  result['name'] = state_machine_name
 
   return result
 
@@ -278,7 +287,7 @@ def get_cloudwatch_log_group_name_from_arn(arn: str) -> str:
   return m.group('log_group_name')
 
 def get_cloudwatch_log_group_name_from_id(id: str) -> str:
-  return id if not ':' in id else get_aws_step_activity_name_from_arn(id)
+  return id if not ':' in id else get_cloudwatch_log_group_name_from_arn(id)
 
 def find_cloudwatch_log_groups(
       logs: CloudWatchLogsClient,
@@ -351,6 +360,7 @@ def create_aws_step_state_machine(
       role_add_policies: Optional[Dict[str, Optional[Union[str, JsonableDict]]]]=None,
       role_add_cloudwatch_policy: bool=True,
       role_add_xray_policy: bool=True,
+      state_machine_prefix: str='',
       allow_role_exists: bool=True,
       allow_exists: bool=False
     ) -> JsonableDict:
@@ -388,11 +398,15 @@ def create_aws_step_state_machine(
 
   if allow_exists:
     try:
-      result = describe_aws_step_state_machine(get_sfn(), state_machine_id)
+      result = describe_aws_step_state_machine(get_sfn(), state_machine_id, state_machine_prefix=state_machine_prefix)
       return result
     except RuntimeError as ex:
       if not str(ex).endswith('was not found'):
         raise
+
+  state_machine_full_name = state_machine_prefix + state_machine_id
+  if ':' in state_machine_full_name:
+    raise RuntimeError(f'State Machine name must not contain ":": "{state_machine_full_name}"')
 
   if states is None:
     states = { start_at: dict(Type='Pass', End=True) }
@@ -400,7 +414,7 @@ def create_aws_step_state_machine(
   state_machine_name = state_machine_id
 
   if role_id is None:
-    role_id = f'StepFunctions-{state_machine_name}-role'
+    role_id = f'StepFunctions-{state_machine_full_name}-role'
 
   if role_description is None:
     role_description = f'Stepfunctions role for {role_id}'
@@ -420,7 +434,7 @@ def create_aws_step_state_machine(
     )
   role_arn = role_info['Arn']
   if comment is None:
-    comment = f'Stepfunction state machine {state_machine_name}'
+    comment = f'Stepfunction state machine {state_machine_full_name}'
   definition: JsonableDict = dict(Comment=comment, StartAt=start_at, States=states)
   if not timeout_seconds is None and timeout_seconds != 0.0:
     definition['TimeoutSeconds'] = round(timeout_seconds)
@@ -435,7 +449,7 @@ def create_aws_step_state_machine(
   default_log_group_arn: Optional[str] = None
   default_log_group_added: bool = False
   if add_default_cloudwatch_log_destination:
-    default_log_group_name = f'/aws/vendedlogs/states/{state_machine_name}-Logs'
+    default_log_group_name = f'/aws/vendedlogs/states/{state_machine_full_name}-Logs'
     default_log_group_desc = create_cloudwatch_log_group(get_logs(), default_log_group_name, allow_exists=True)
     default_log_group_arn = default_log_group_desc['arn']
   for destination in log_destinations:
@@ -452,7 +466,7 @@ def create_aws_step_state_machine(
 
   tracingConfiguration: TracingConfigurationTypeDef = dict(enabled=not not tracingEnabled)
 
-  logger.debug(f'Creating state machine "{state_machine_name}"; roleArn="{role_arn}"; definition={json.dumps(definition, sort_keys=True)}')
+  logger.debug(f'Creating state machine "{state_machine_full_name}"; roleArn="{role_arn}"; definition={json.dumps(definition, sort_keys=True)}')
 
   # Unfortunately create_state_machine will fail if the role has just been created and the attached
   # policies have not had time to propogate.  So, we will retry for a little while.
@@ -460,7 +474,7 @@ def create_aws_step_state_machine(
   while True:
     try:
       resp = get_sfn().create_state_machine(
-          name=state_machine_name,
+          name=state_machine_full_name,
           definition=json.dumps(definition, sort_keys=True),
           roleArn=role_arn,
           type=state_machine_type,
@@ -477,12 +491,13 @@ def create_aws_step_state_machine(
       time.sleep(3)
 
   state_machine_arn = resp['stateMachineArn']
-  result = describe_aws_step_state_machine(get_sfn(), state_machine_arn)
+  result = describe_aws_step_state_machine(get_sfn(), state_machine_arn, state_machine_prefix=state_machine_prefix)
   return result
 
 def describe_aws_step_activity(
       sfn: SFNClient,
       activity_id: str,
+      activity_prefix: str='',
     ) -> JsonableDict:
   """Returns the result of SFNClient.describe_activity() for the given activity name or ARN.
 
@@ -497,38 +512,45 @@ def describe_aws_step_activity(
       JsonableDict: a dict with 'creationDate', 'name' and 'activityArn' fields, similar to t
                     the result of sfn.describe_activity for the requested ID.
   """
-  activity_arn: str
-  activity_name: str
   result: JsonableDict
   if ':' in activity_id:
     # activity_id must be an ARN. Look up the activity name
     resp = sfn.describe_activity(activityArn=activity_id)
+    full_activity_name = resp['name']
+    if not full_activity_name.startswith(activity_prefix):
+      raise RuntimeError(f'Activity full name "{full_activity_name}" does not start with required prefix "{activity_prefix}"')
+
+    activity_name = full_activity_name[len(activity_prefix):]
     result = dict(
-        name=resp['name'],
+        name=activity_name,
+        full_name=full_activity_name,
         activityArn=resp['activityArn'],
         creationDate=str(resp['creationDate'])
       )
   else:
     # activity_id must be an activity name. Enumerate all activities and
     # find the matching name
-    activity_name_to_entry: Dict[str, JsonableDict] = {}
+    activity_full_name = activity_prefix + activity_id
+    activity_full_name_to_entry: Dict[str, JsonableDict] = {}
     paginator = sfn.get_paginator('list_activities')
     page_iterator = paginator.paginate()
     for page in page_iterator:
       for act_desc in page['activities']:
-        activity_name_to_entry[act_desc['name']] = dict(
-            name=act_desc['name'],
+        activity_full_name_to_entry[act_desc['name']] = dict(
+            full_name=act_desc['name'],
             activityArn=act_desc['activityArn'],
             creationDate=str(act_desc['creationDate'])
           )
-    if not activity_id in activity_name_to_entry:
-      raise RuntimeError(f"AWS stepfunctions activity name '{activity_id}' was not found")
-    result = activity_name_to_entry[activity_id]
+    if not activity_full_name in activity_full_name_to_entry:
+      raise RuntimeError(f"AWS stepfunctions activity full name '{activity_full_name}' was not found")
+    result = activity_full_name_to_entry[activity_full_name]
+    result['name'] = activity_id
   return result
 
 def create_aws_step_activity(
       sfn: SFNClient,
       activity_id: str,
+      activity_prefix: str='',
       allow_exists: bool=True
     ) -> JsonableDict:
   """Creates an activity that can implement a state of an AWS step function.
@@ -544,18 +566,23 @@ def create_aws_step_activity(
   """
   if allow_exists:
     try:
-      result = describe_aws_step_activity(sfn, activity_id)
+      result = describe_aws_step_activity(sfn, activity_id, activity_prefix=activity_prefix)
       return result
     except RuntimeError as ex:
       if ':' in activity_id or not str(ex).endswith('was not found'):
         raise
-  result = normalize_jsonable_dict(sfn.create_activity(name=activity_id))
+  activity_full_name = activity_prefix + activity_id
+  if ':' in activity_full_name:
+    raise ValueError(f'Activity name may not contain ":": "{activity_full_name}"')
+  result = normalize_jsonable_dict(sfn.create_activity(name=activity_full_name))
+  result['full_name'] = activity_full_name
   result['name'] = activity_id
   return result
 
 def delete_aws_step_activity(
       sfn: SFNClient,
       activity_id: str,
+      activity_prefix: str='',
       must_exist: bool=False
     ):
   """Creates an activity that can implement a state of an AWS step function.
@@ -567,22 +594,25 @@ def delete_aws_step_activity(
   """
   activity_arn: str
   if must_exist or not ':' in activity_id:
-    desc = describe_aws_step_activity(sfn, activity_id)
+    desc = describe_aws_step_activity(sfn, activity_id, activity_prefix=activity_prefix)
     activity_arn = desc['activityArn']
   else:
     activity_arn = activity_id
-  sfn.delete_activity(activityARn=activity_arn)
+  sfn.delete_activity(activityArn=activity_arn)
 
 _activity_arn_re = re.compile(r'^arn:aws:states:(?P<region>[a-z][a-z0-9\-]+):(?P<account>[0-9]+):activity:(?P<activity_name>[^ \t\r\n<>{}[\]?*"#%\\^|~`$,;:/]+)$')
 
 def is_aws_step_activity_arn(arn: str) -> bool:
   return not _activity_arn_re.match(arn) is None
 
-def get_aws_step_activity_name_from_arn(arn: str) -> str:
+def get_aws_step_activity_name_from_arn(arn: str, activity_prefix: str='') -> str:
   m = _activity_arn_re.match(arn)
   if not m:
     raise RuntimeError(f'Invalid AWS stepfunction activity ARN: "{arn}"')
-  return m.group('activity_name')
+  activity_full_name =  m.group('activity_name')
+  if not activity_full_name.startswith(activity_prefix):
+    raise RuntimeError(f'AWS stepfunction actvity ARN does not include required prefix "{activity_prefix}": "{arn}"')
+  return activity_full_name[len(activity_prefix):]
 
 # arn:aws:states:us-west-2:745019234935:execution:TestRunSelectedActivity:9de2711e-06a3-44d2-b95e-9a93599bd1f8
 _job_arn_re = re.compile(r'^arn:aws:states:(?P<region>[a-z][a-z0-9\-]+):(?P<account>[0-9]+):execution:(?P<state_machine_name>[^ \t\r\n<>{}[\]?*"#%\\^|~`$,;:/]+):(?P<jobid>[^ \t\r\n<>{}[\]?*"#%\\^|~`$,;:/]+)$')
@@ -590,11 +620,14 @@ _job_arn_re = re.compile(r'^arn:aws:states:(?P<region>[a-z][a-z0-9\-]+):(?P<acco
 def is_aws_step_job_arn(arn: str) -> bool:
   return not _job_arn_re.match(arn) is None
 
-def get_aws_step_state_machine_and_jobids_from_arn(arn: str) -> Tuple[str, str]:
+def get_aws_step_state_machine_and_jobid_from_arn(arn: str, state_machine_prefix: str='') -> Tuple[str, str]:
   m = _job_arn_re.match(arn)
   if not m:
     raise RuntimeError(f'Invalid AWS stepfunction job ARN: "{arn}"')
-  return m.group('state_machine_name'), m.group('jobid')
+  state_machine_full_name, jobid = m.group('state_machine_name'), m.group('jobid')
+  if not state_machine_full_name.startswith(state_machine_prefix):
+    raise RuntimeError(f'AWS stepfunction job ARN does not include required state machine prefix "{state_machine_prefix}": "{arn}"')
+  return state_machine_full_name[len(state_machine_prefix):], jobid
 
 # arn:aws:states:us-west-2:745019234935:stateMachine:TestRunSelectedActivity
 _state_machine_arn_re = re.compile(r'^arn:aws:states:(?P<region>[a-z][a-z0-9\-]+):(?P<account>[0-9]+):stateMachine:(?P<state_machine_name>[^ \t\r\n<>{}[\]?*"#%\\^|~`$,;:/]+)$')
@@ -602,16 +635,20 @@ _state_machine_arn_re = re.compile(r'^arn:aws:states:(?P<region>[a-z][a-z0-9\-]+
 def is_aws_step_state_machine_arn(arn: str) -> bool:
   return not _state_machine_arn_re.match(arn) is None
 
-def get_aws_step_state_machine_name_from_arn(arn: str) -> str:
+def get_aws_step_state_machine_name_from_arn(arn: str, state_machine_prefix: str='') -> str:
   m = _state_machine_arn_re.match(arn)
   if not m:
     raise RuntimeError(f'Invalid AWS stepfunction state machine ARN: "{arn}"')
-  return m.group('state_machine_name')
+  state_machine_full_name =  m.group('state_machine_name')
+  if not state_machine_full_name.startswith(state_machine_prefix):
+    raise RuntimeError(f'AWS stepfunction state machine ARN does not include required prefix "{state_machine_prefix}": "{arn}"')
+  return state_machine_full_name[len(state_machine_prefix):]
 
 def describe_aws_step_job(
       sfn: SFNClient,
       jobid: str,
       state_machine_id: Optional[str]=None,
+      state_machine_prefix: str=''
     ) -> JsonableDict:
   """Returns the result of SFNClient.describe_execution() for the given state machine name or ARN.
 
@@ -658,22 +695,25 @@ def describe_aws_step_job(
     else:
       # state_machine_id must be a state machine name. Enumerate all state machines and
       # find the matching name
-      state_machine_name_to_arn: Dict[str, str] = {}
+      state_machine_full_name = state_machine_prefix + state_machine_id
+      state_machine_full_name_to_arn: Dict[str, str] = {}
       paginator = sfn.get_paginator('list_state_machines')
       page_iterator = paginator.paginate()
       for page in page_iterator:
         for state_machine_desc in page['stateMachines']:
-          state_machine_name_to_arn[state_machine_desc['name']] = state_machine_desc['stateMachineArn']
-      if not state_machine_id in state_machine_name_to_arn:
-        raise RuntimeError(f"AWS stepfunctions state machine name '{state_machine_id}' was not found")
-      state_machine_arn = state_machine_name_to_arn[state_machine_id]
+          state_machine_full_name_to_arn[state_machine_desc['name']] = state_machine_desc['stateMachineArn']
+      if not state_machine_full_name in state_machine_full_name_to_arn:
+        raise RuntimeError(f"AWS stepfunctions state machine full name '{state_machine_full_name}' was not found")
+      state_machine_arn = state_machine_full_name_to_arn[state_machine_full_name]
     m = _state_machine_arn_re.match(state_machine_arn)
     if not m:
       raise RuntimeError(f'Invalid AWS stepfunction state machine ARN: "{state_machine_arn}"')
-    state_machine_name = m.group('state_machine_name')
+    state_machine_full_name = m.group('state_machine_name')
+    if not state_machine_full_name.startswith(state_machine_prefix):
+      raise RuntimeError(f'State machine full name in ARN does not start with required prefix "{state_machine_prefix}": "{state_machine_arn}"')
     aws_region = m.group('region')
     aws_account = m.group('account')
-    job_arn=f'arn:aws:states:{aws_region}:{aws_account}:execution:{state_machine_name}:{jobid}'
+    job_arn=f'arn:aws:states:{aws_region}:{aws_account}:execution:{state_machine_full_name}:{jobid}'
 
   resp = sfn.describe_execution(executionArn=job_arn)
   result = normalize_jsonable_dict(resp)
