@@ -200,7 +200,7 @@ class AwsStepActivityTaskHandler:
     if self.task_completed or self.shutting_down:
       raise RuntimeError("Execution of the AwsStepActivityTaskHandler was cancelled")
 
-  def send_task_success_locked(self, output_data: Optional[JsonableDict]=None):
+  def send_task_success_locked(self, output_data: Optional[JsonableDict]=None) -> bool:
     """Sends a successful completion notification with output data for the task.
        session_lock must already be held.
 
@@ -212,22 +212,34 @@ class AwsStepActivityTaskHandler:
     Raises:
         RuntimeError: Success or failure notification for the task has already been sent.
     """
+    logger.debug("send_task_success_locked: entering")
     if self.task_completed:
-      raise RuntimeError("AWS stepfunctions task is already completed")
+      logger.debug("send_task_success_locked: task is already completed; exiting")
+      return False
     final_output_data = {} if output_data is None else dict(output_data)
     self.end_time_ns = time.monotonic_ns()
     self.fill_default_success_data(final_output_data)
     output_json = json.dumps(final_output_data, sort_keys=True, separators=(',', ':'))
-    logger.debug(f"Sending task_success, output={json.dumps(final_output_data, sort_keys=True, indent=2)}")
+    logger.debug(f"send_task_success_locked: Sending task_success, output={json.dumps(final_output_data, sort_keys=True, indent=2)}")
     self.task_completed = True
-    self.sfn.send_task_success(
-        taskToken=self.task.task_token,
-        output=output_json
-      )
-    self.cv.notify_all()
-    self.on_complete_sent_locked()
+    try:
+      self.sfn.send_task_success(
+          taskToken=self.task.task_token,
+          output=output_json
+        )
+    except Exception as ex:
+      logger.debug(f"send_task_success_locked: sending task failure failed: {ex}")
+      raise
+    finally:
+      self.cv.notify_all()
+      try:
+        self.on_complete_sent_locked()
+      except Exception:
+        pass
+      logger.debug("send_task_success_locked: exiting")
+    return True
 
-  def send_task_success(self, output_data: Optional[JsonableDict]=None):
+  def send_task_success(self, output_data: Optional[JsonableDict]=None) -> bool:
     """Sends a successful completion notification with output data for the task.
        session_lock must not be held.
 
@@ -239,10 +251,11 @@ class AwsStepActivityTaskHandler:
     Raises:
         RuntimeError: Success or failure notification for the task has already been sent.
     """
+    logger.debug("send_task_success: waiting for lock")
     with self.session_mutex:
-      self.send_task_success_locked(output_data)
+      return self.send_task_success_locked(output_data)
 
-  def send_task_failure_locked(self, error: Any=None, cause: Jsonable=None):
+  def send_task_failure_locked(self, error: Any=None, cause: Jsonable=None) -> bool:
     """Sends a failure completion notification for the task.
        session_lock must already be held.
 
@@ -258,8 +271,11 @@ class AwsStepActivityTaskHandler:
     Raises:
         RuntimeError: Success or failure notification for the task has already been sent.
     """
+    logger.debug("send_task_failure_locked: entering")
+
     if self.task_completed:
-      raise RuntimeError("AWS stepfunctions task is already completed")
+      logger.debug("send_task_failure_locked: task is already completed; exiting")
+      return False
     if error is None:
       error_str = "The activity task failed"
     else:
@@ -277,15 +293,25 @@ class AwsStepActivityTaskHandler:
     cause_str = json.dumps(cause, sort_keys=True, separators=(',', ':'))
     logger.info(f"Sending task_failure, error='{error_str}', cause={json.dumps(cause, indent=2, sort_keys=True)}")
     self.task_completed = True
-    self.sfn.send_task_failure(
-        taskToken=self.task.task_token,
-        cause=cause_str,
-        error=error_str
-      )
-    self.cv.notify_all()
-    self.on_complete_sent_locked()
+    try:
+      self.sfn.send_task_failure(
+          taskToken=self.task.task_token,
+          cause=cause_str,
+          error=error_str
+        )
+    except Exception as ex:
+      logger.debug(f"send_task_failure_locked: sending task failure failed: {ex}")
+      raise
+    finally:
+      self.cv.notify_all()
+      try:
+        self.on_complete_sent_locked()
+      except Exception:
+        pass
+      logger.debug("send_task_failure_locked: exiting")
+    return True
 
-  def send_task_failure(self, error: Any=None, cause: Jsonable=None):
+  def send_task_failure(self, error: Any=None, cause: Jsonable=None) -> bool:
     """Sends a failure completion notification for the task.
        session_lock must not be held.
 
@@ -301,15 +327,16 @@ class AwsStepActivityTaskHandler:
     Raises:
         RuntimeError: Success or failure notification for the task has already been sent.
     """
+    logger.debug("send_task_failure: waiting for lock")
     with self.session_mutex:
-      self.send_task_failure_locked(error=error, cause=cause)
+      return self.send_task_failure_locked(error=error, cause=cause)
 
   def send_task_exception_locked(
         self,
         exc: BaseException,
         tb: Optional[TracebackType]=None,
         exc_type: Optional[Type[BaseException]]=None,
-      ):
+      ) -> bool:
     """Sends a failure completion notification based on an exception for the task.
        session_lock must already be held.
 
@@ -328,14 +355,14 @@ class AwsStepActivityTaskHandler:
       exc_type = type(exc)
     tb_list = traceback.format_exception(etype=exc_type, value=exc, tb=tb, limit=20)
     cause: JsonableDict = dict(tb=tb_list)
-    self.send_task_failure_locked(error=exc, cause=cause)
+    return self.send_task_failure_locked(error=exc, cause=cause)
 
   def send_task_exception(
         self,
         exc: BaseException,
         tb: Optional[TracebackType]=None,
         exc_type: Optional[Type[BaseException]]=None,
-      ):
+      ) -> bool:
     """Sends a failure completion notification based on an exception for the task.
        session_lock must not be held.
 
@@ -350,8 +377,9 @@ class AwsStepActivityTaskHandler:
     Raises:
         RuntimeError: Success or failure notification for the task has already been sent.
     """
+    logger.debug("send_task_exception: waiting for lock")
     with self.session_mutex:
-      self.send_task_exception_locked(exc, tb=tb, exc_type=exc_type)
+      return self.send_task_exception_locked(exc, tb=tb, exc_type=exc_type)
 
   def send_task_heartbeat_locked(self):
     """Sends a heartbeat keepalive notification for the task.
@@ -364,7 +392,7 @@ class AwsStepActivityTaskHandler:
     """
     if self.task_completed:
       raise RuntimeError("AWS stepfunctions task is already completed")
-    logger.debug(f"Sending task_heartbeat")
+    logger.debug(f"Sending task_heartbeat with lock held")
     self.sfn.send_task_heartbeat(
         taskToken=self.task.task_token
       )
@@ -379,6 +407,7 @@ class AwsStepActivityTaskHandler:
     Raises:
         RuntimeError: Success or failure notification for the task has already been sent.
     """
+    logger.debug("send_task_heartbeat: waiting for lock")
     with self.session_mutex:
       self.send_task_heartbeat_locked()
 
@@ -416,10 +445,12 @@ class AwsStepActivityTaskHandler:
       try:
         background_thread.start()
       except Exception as ex:
+        logger.debug(f"Exception launching background thread with lock held; sending failure: {ex}")
         self.background_thread = None
         try:
           self.send_task_exception_locked(ex)
-        except Exception:
+        except Exception as ex:
+          logger.debug(f"Unable to send failure after Exception launching background thread with lock held: {ex}")
           pass
         raise
     logger.debug(f"Task context entered")
@@ -563,46 +594,56 @@ class AwsStepActivityTaskHandler:
     final failure notification).
     
     """
-    logger.debug(f"Background thread starting")
-    with self.session_mutex:
-      try:
-        heartbeat_seconds = self.heartbeat_interval_seconds()
-        while True:
-          if self.task_completed:
-            break
-          # We will go to sleep for the minimum of the heartbeat interval
-          # and the max remaining runtime for the task. If the main thread completes
-          # the task, they will wake us up early.
-          sleep_secs = heartbeat_seconds
-          remaining_time_sec = self.remaining_time_seconds()
-          if not remaining_time_sec is None:
-            if remaining_time_sec <= 0.0:
-              raise RuntimeError("Max task runtime exceeded")
-            if remaining_time_sec < sleep_secs:
-              sleep_secs = remaining_time_sec
-          logger.debug(f"Background thread sleeping for {sleep_secs} seconds")
-          # Waiting on the condition variable will temporarily release
-          # session_mutex, which will allow the main thread to send
-          # success or failure notifications while we are sleeping. If they
-          # do that, they will wake us up early and we will find out
-          # the task is complete and exit
-          self.cv.wait(timeout=sleep_secs)
-          logger.debug(f"Background thread awake")
-          if self.task_completed:
-            # The main thread completed the task
-            break
-          remaining_time_sec = self.remaining_time_seconds()
-          if not remaining_time_sec is None and remaining_time_sec <= 0.0:
-            # Task has run out of time. Send a failure notification and exit early.
-            raise RuntimeError("Max task runtime exceeded")
-          self.send_task_heartbeat_locked()
-      except Exception as ex:
-        logger.warning(f"Exception in background thread: {ex}")
+    try:
+      logger.debug(f"Background thread starting")
+      with self.session_mutex:
         try:
-          self.send_task_exception_locked(ex)
-        except Exception:
-          pass
+          heartbeat_seconds = self.heartbeat_interval_seconds()
+          while True:
+            if self.task_completed:
+              break
+            # We will go to sleep for the minimum of the heartbeat interval
+            # and the max remaining runtime for the task. If the main thread completes
+            # the task, they will wake us up early.
+            sleep_secs = heartbeat_seconds
+            remaining_time_sec = self.remaining_time_seconds()
+            if not remaining_time_sec is None:
+              if remaining_time_sec <= 0.0:
+                raise RuntimeError("Max task runtime exceeded")
+              if remaining_time_sec < sleep_secs:
+                sleep_secs = remaining_time_sec
+            logger.debug(f"Background thread sleeping for {sleep_secs} seconds")
+            # Waiting on the condition variable will temporarily release
+            # session_mutex, which will allow the main thread to send
+            # success or failure notifications while we are sleeping. If they
+            # do that, they will wake us up early and we will find out
+            # the task is complete and exit
+            self.cv.wait(timeout=sleep_secs)
+            logger.debug(f"Background thread awake")
+            if self.task_completed:
+              # The main thread completed the task
+              break
+            remaining_time_sec = self.remaining_time_seconds()
+            if not remaining_time_sec is None and remaining_time_sec <= 0.0:
+              # Task has run out of time. Send a failure notification and exit early.
+              raise RuntimeError("Max task runtime exceeded")
+            self.send_task_heartbeat_locked()
+        except Exception as ex:
+          logger.warning(f"Exception in background thread with lock held, sending error completion: {ex}")
+          try:
+            self.send_task_exception_locked(ex)
+          except Exception:
+            logger.warning(f"Exception in background thread sending task exception with lock held: {ex}")
+            pass
+    except Exception as ex:
+      logger.warning(f"Exception in background thread with lock released, sending error completion: {ex}")
+      try:
+        self.send_task_exception(ex)
+      except Exception:
+        logger.warning(f"Exception in background thread sending task exception with lock released: {ex}")
+        pass
     logger.debug(f"Background thread exiting")
+
 
   def on_complete_sent_locked(self):
     """Called after a completion notification is sent
