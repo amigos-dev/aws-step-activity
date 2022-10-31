@@ -458,17 +458,21 @@ class AwsStepActivityTaskHandler:
             context to exit (this will result in the execption being propagated outside
             the context).
     """
-    logger.debug(f"Exiting task context")
+    logger.debug(f"Exiting task context, waiting for session mutex")
     background_thread: Optional[Thread] = None
     with self.session_mutex:
+      logger.debug(f"Exiting task context, acquired session mutex")
       background_thread = self.background_thread
       self.background_thread = None
       if not self.task_completed:
         if exc is None:
+          logger.debug(f"Exiting task context, sending success")
           self.send_task_success_locked(output_data={})
         else:
+          logger.debug(f"Exiting task context, sending failure")
           self.send_task_exception_locked(exc, tb=tb, exc_type=exc_type)
     if not background_thread is None:
+      logger.debug(f"Exiting task context, waiting for background thread to exit")
       background_thread.join()
     logger.debug(f"Task context exited")
     return exc_type is None
