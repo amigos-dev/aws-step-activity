@@ -133,7 +133,7 @@ class CommandLineInterface:
     if self._state_machine_prefix is None:
       state_machine_prefix: Optional[str] = self._args.state_machine_prefix
       if state_machine_prefix is None:
-        state_machine_prefix = os.environ.get('AWS_STEP_STATE_MACHINE_PREFIX', None)
+        state_machine_prefix = os.environ.get('AWS_STEP_STATE_MACHINE_PREFIX', '')
       self._state_machine_prefix = state_machine_prefix
     return self._state_machine_prefix
 
