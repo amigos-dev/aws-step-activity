@@ -37,7 +37,7 @@
                 "--tb",
                 "--loglevel", "debug",
                 "-p", "amigos",
-                "-a", "Sam-MSI-worker",
+                "-a", "sfn-state-machine-dev-SamUbuntuVM",
                 "run"
             ],
             "justMyCode": false
