@@ -353,7 +353,9 @@ class AwsStepActivityTaskHandler:
     """
     if exc_type is None:
       exc_type = type(exc)
-    tb_list = traceback.format_exception(etype=exc_type, value=exc, tb=tb, limit=20)
+    # NOTE: traceback.format_exception was changed in python 3.10. etype was renamed to exc and
+    #       is now positional
+    tb_list = traceback.format_exception(exc_type, value=exc, tb=tb, limit=20)
     cause: JsonableDict = dict(tb=tb_list)
     return self.send_task_failure_locked(error=exc, cause=cause)
 
