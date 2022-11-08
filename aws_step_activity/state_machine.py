@@ -10,6 +10,7 @@
 from time import monotonic_ns, sleep
 from typing import Optional, Dict, Union, List, Tuple, Set, Any, Generator, IO
 from .internal_types import (
+    Jsonable,
     JsonableDict,
     SFNClient,
     SFN_LoggingConfigurationTypeDef as LoggingConfigurationTypeDef,
@@ -34,6 +35,7 @@ from .sfn_util import (
     delete_aws_step_activity,
     describe_aws_step_state_machine,
     describe_aws_step_job,
+    stop_aws_step_job,
     is_aws_step_activity_arn,
     get_aws_step_activity_name_from_arn,
     create_aws_step_state_machine,
@@ -963,6 +965,22 @@ class AwsStepStateMachine:
           raise TimeoutError("Timed out waiting for job to complete")
         sleep_ns = min(sleep_ns, remaining_ns)
       sleep(sleep_ns/1000000000.0)
+
+  def stop_job(
+        self,
+        jobid: str,
+        error: Optional[str]=None,
+        cause: Jsonable=None,
+      ) -> JsonableDict:
+    result = stop_aws_step_job(
+        self.sfn,
+        jobid,
+        error=error,
+        cause=cause,
+        state_machine_id=self.state_machine_arn,
+        state_machine_prefix=self.state_machine_prefix,
+      )
+    return result
 
   def download_job_output_file_to_fileobj(
         self,

@@ -631,6 +631,7 @@ def get_aws_step_state_machine_and_jobid_from_arn(arn: str, state_machine_prefix
 
 # arn:aws:states:us-west-2:745019234935:stateMachine:TestRunSelectedActivity
 _state_machine_arn_re = re.compile(r'^arn:aws:states:(?P<region>[a-z][a-z0-9\-]+):(?P<account>[0-9]+):stateMachine:(?P<state_machine_name>[^ \t\r\n<>{}[\]?*"#%\\^|~`$,;:/]+)$')
+_job_arn_re = re.compile(r'^arn:aws:states:(?P<region>[a-z][a-z0-9\-]+):(?P<account>[0-9]+):execution:(?P<state_machine_name>[^ \t\r\n<>{}[\]?*"#%\\^|~`$,;:/]+):(?P<jobid>[^ \t\r\n<>{}[\]?*"#%\\^|~`$,;:/]+)$')
 
 def is_aws_step_state_machine_arn(arn: str) -> bool:
   return not _state_machine_arn_re.match(arn) is None
@@ -643,6 +644,61 @@ def get_aws_step_state_machine_name_from_arn(arn: str, state_machine_prefix: str
   if not state_machine_full_name.startswith(state_machine_prefix):
     raise RuntimeError(f'AWS stepfunction state machine ARN does not include required prefix "{state_machine_prefix}": "{arn}"')
   return state_machine_full_name[len(state_machine_prefix):]
+
+def get_aws_step_state_machine_arn_from_id(
+      sfn: SFNClient,
+      state_machine_id: str,
+      state_machine_prefix: str='',
+    ) -> str:
+  state_machine_arn: str
+  if ':' in state_machine_id:
+    # state_machine_id must be an ARN.
+    state_machine_arn = state_machine_id
+  else:
+    # state_machine_id must be a state machine name. Enumerate all state machines and
+    # find the matching name
+    state_machine_full_name = state_machine_prefix + state_machine_id
+    state_machine_full_name_to_arn: Dict[str, str] = {}
+    paginator = sfn.get_paginator('list_state_machines')
+    page_iterator = paginator.paginate()
+    for page in page_iterator:
+      for state_machine_desc in page['stateMachines']:
+        state_machine_full_name_to_arn[state_machine_desc['name']] = state_machine_desc['stateMachineArn']
+    if not state_machine_full_name in state_machine_full_name_to_arn:
+      raise RuntimeError(f"AWS stepfunctions state machine full name '{state_machine_full_name}' was not found")
+    state_machine_arn = state_machine_full_name_to_arn[state_machine_full_name]
+  m = _state_machine_arn_re.match(state_machine_arn)
+  if not m:
+    raise RuntimeError(f'Invalid AWS stepfunction state machine ARN: "{state_machine_arn}"')
+  return state_machine_arn
+
+def get_aws_step_job_arn_from_id(
+      sfn: SFNClient,
+      jobid: str,
+      state_machine_id: Optional[str]=None,
+      state_machine_prefix: str='',
+    ) -> str:
+  if ':' in jobid:
+    job_arn = jobid
+  else:
+    if state_machine_id is None:
+      raise RuntimeError("state_machine_id must be provided if jobid is not an ARN")
+    state_machine_arn = get_aws_step_state_machine_arn_from_id(sfn, state_machine_id, state_machine_prefix=state_machine_prefix)
+    m = _state_machine_arn_re.match(state_machine_arn)
+    if not m:
+      raise RuntimeError(f'Invalid AWS stepfunction state machine ARN: "{state_machine_arn}"')
+    state_machine_full_name = m.group('state_machine_name')
+    if not state_machine_full_name.startswith(state_machine_prefix):
+      raise RuntimeError(f'State machine full name in ARN does not start with required prefix "{state_machine_prefix}": "{state_machine_arn}"')
+    aws_region = m.group('region')
+    aws_account = m.group('account')
+    job_arn=f'arn:aws:states:{aws_region}:{aws_account}:execution:{state_machine_full_name}:{jobid}'
+  m = _job_arn_re.match(job_arn)
+  if not m:
+    raise RuntimeError(f'Invalid AWS stepfunction job ARN: "{job_arn}"')
+
+  return job_arn
+
 
 def describe_aws_step_job(
       sfn: SFNClient,
@@ -659,7 +715,7 @@ def describe_aws_step_job(
           Either an AWS step function job name, or its ARN
       state_machine_id (str):
          Either an AWS step function state machine name, or its ARN. May be None
-         if state_machine_id is an ARN. Default is None.
+         if stjobid is an ARN. Default is None.
 
   Raises:
       RuntimeError: The specified jobid does not exist.
@@ -682,40 +738,47 @@ def describe_aws_step_job(
               "traceHeader": "Root=1-634368f0-fd3bef0eed732a65fb6e51fb;Sampled=1"
           }
   """
-  job_arn: str
-  if ':' in jobid:
-    job_arn = jobid
-  else:
-    state_machine_arn: str
-    if state_machine_id is None:
-      raise RuntimeError("state_machine_id must be provided if jobid is not an ARN")
-    if ':' in state_machine_id:
-      # state_machine_id must be an ARN.
-      state_machine_arn = state_machine_id
-    else:
-      # state_machine_id must be a state machine name. Enumerate all state machines and
-      # find the matching name
-      state_machine_full_name = state_machine_prefix + state_machine_id
-      state_machine_full_name_to_arn: Dict[str, str] = {}
-      paginator = sfn.get_paginator('list_state_machines')
-      page_iterator = paginator.paginate()
-      for page in page_iterator:
-        for state_machine_desc in page['stateMachines']:
-          state_machine_full_name_to_arn[state_machine_desc['name']] = state_machine_desc['stateMachineArn']
-      if not state_machine_full_name in state_machine_full_name_to_arn:
-        raise RuntimeError(f"AWS stepfunctions state machine full name '{state_machine_full_name}' was not found")
-      state_machine_arn = state_machine_full_name_to_arn[state_machine_full_name]
-    m = _state_machine_arn_re.match(state_machine_arn)
-    if not m:
-      raise RuntimeError(f'Invalid AWS stepfunction state machine ARN: "{state_machine_arn}"')
-    state_machine_full_name = m.group('state_machine_name')
-    if not state_machine_full_name.startswith(state_machine_prefix):
-      raise RuntimeError(f'State machine full name in ARN does not start with required prefix "{state_machine_prefix}": "{state_machine_arn}"')
-    aws_region = m.group('region')
-    aws_account = m.group('account')
-    job_arn=f'arn:aws:states:{aws_region}:{aws_account}:execution:{state_machine_full_name}:{jobid}'
-
+  job_arn = get_aws_step_job_arn_from_id(sfn, jobid, state_machine_id=state_machine_id, state_machine_prefix=state_machine_prefix)
   resp = sfn.describe_execution(executionArn=job_arn)
+  result = normalize_jsonable_dict(resp)
+
+  return result
+
+def stop_aws_step_job(
+      sfn: SFNClient,
+      jobid: str,
+      error: Any=None,
+      cause: Jsonable=None,
+      state_machine_id: Optional[str]=None,
+      state_machine_prefix: str=''
+    ) -> JsonableDict:
+  """Aboorts a running AWS stepfunction execution.
+
+  Args:
+      sfn (SFNClient):
+          The boto3 client for AWS step functions
+      jobid (str):
+          Either an AWS step function job name, or its ARN
+      state_machine_id (str):
+         Either an AWS step function state machine name, or its ARN. May be None
+         if jobid is an ARN. Default is None.
+
+  Raises:
+      RuntimeError: The specified jobid does not exist.
+      RuntimeError: The specified state_machine_id does not exist.
+  """
+  job_arn = get_aws_step_job_arn_from_id(sfn, jobid, state_machine_id=state_machine_id, state_machine_prefix=state_machine_prefix)
+  params = dict(executionArn=job_arn)
+  if not error is None:
+    params.update(error=str(error))
+  if not cause is None:
+    if not isinstance(cause, str):
+      if not isinstance(cause, dict):
+        cause = dict(value=cause)
+      cause = json.dumps(cause)
+    params.update(cause=cause)
+  
+  resp = sfn.stop_execution(**params)
   result = normalize_jsonable_dict(resp)
 
   return result
