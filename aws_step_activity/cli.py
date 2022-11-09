@@ -519,6 +519,17 @@ class CommandLineInterface:
     self.pretty_print(result)
     return 0
 
+  def cmd_stop_job(self) -> int:
+    args = self._args
+    jobid: str = args.jobid
+    error: Optional[str] = args.error
+    cause: Optional[str] = args.cause
+
+    state_machine = self.get_state_machine()
+    result = state_machine.stop_job(jobid, error=error, cause=cause)
+    self.pretty_print(result)
+    return 0
+
   def download_job_output_file_to_fileobj(
         self,
         jobid: str,
@@ -782,6 +793,20 @@ class CommandLineInterface:
     parser_wait_for_job.add_argument('jobid',
                         help='The name of the job.')
     parser_wait_for_job.set_defaults(func=self.cmd_wait_for_job)
+
+    # ======================= stop-job
+
+    parser_stop_job = subparsers.add_parser('stop-job',
+                            description='''Stops a running job.''')
+    parser_stop_job.add_argument('-m', '--state-machine-id', default=None,
+                        help='The AWS Step Function state machine name or state machine ARN. By default, environment variable AWS_STEP_STATE_MACHINE is used.')
+    parser_stop_job.add_argument('-e', '--error', default=None,
+                        help='The error string to be reported. Default is None.')
+    parser_stop_job.add_argument('-c', '--cause', default=None,
+                        help='The detailed cause of the error to be reported. Generally expressed as serialized JSON. Default is None.')
+    parser_stop_job.add_argument('jobid',
+                        help='The name of the job.')
+    parser_stop_job.set_defaults(func=self.cmd_stop_job)
 
     # ======================= cat-job-output
 
